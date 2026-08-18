@@ -2,6 +2,7 @@ import type {
   AppSettings,
   BacklinkEntry,
   ChatState,
+  Collection,
   NoteDocument,
   NoteMeta,
   ConversationSummary,
@@ -124,6 +125,36 @@ let noteDocs: Record<string, NoteDocument> = {
   },
 };
 
+let mockCollections: Collection[] = [
+  {
+    id: "col-1",
+    name: "入门",
+    description: "",
+    createdAt: now(),
+    updatedAt: now(),
+    parentId: "",
+    noteCount: 1,
+  },
+  {
+    id: "col-2",
+    name: "参考",
+    description: "",
+    createdAt: now(),
+    updatedAt: now(),
+    parentId: "",
+    noteCount: 1,
+  },
+  {
+    id: "col-3",
+    name: "Markdown",
+    description: "",
+    createdAt: now(),
+    updatedAt: now(),
+    parentId: "col-2",
+    noteCount: 0,
+  },
+];
+
 // ── mock API surface (mirrors the real api object) ────────────────────────
 
 export const mockApi = {
@@ -217,6 +248,60 @@ export const mockApi = {
       }
     }
     return result;
+  },
+
+  // ── collections (in-memory tree) ──
+  listCollections: async (): Promise<Collection[]> => [...mockCollections],
+  createCollection: async (
+    name: string,
+    description?: string,
+    parentId?: string
+  ): Promise<Collection> => {
+    const ts = now();
+    const col: Collection = {
+      id: `col-${mockCollections.length + 1}`,
+      name,
+      description: description ?? "",
+      createdAt: ts,
+      updatedAt: ts,
+      parentId: parentId ?? "",
+      noteCount: 0,
+    };
+    mockCollections.push(col);
+    return col;
+  },
+  renameCollection: async (collectionId: string, name: string): Promise<boolean> => {
+    const col = mockCollections.find((c) => c.id === collectionId);
+    if (!col) return false;
+    col.name = name;
+    return true;
+  },
+  moveCollection: async (collectionId: string, newParentId?: string): Promise<boolean> => {
+    const col = mockCollections.find((c) => c.id === collectionId);
+    if (!col) return false;
+    col.parentId = newParentId ?? "";
+    return true;
+  },
+  deleteCollection: async (collectionId: string): Promise<boolean> => {
+    const before = mockCollections.length;
+    mockCollections = mockCollections.filter((c) => c.id !== collectionId);
+    return mockCollections.length < before;
+  },
+  addNoteToCollection: async (): Promise<boolean> => true,
+  removeNoteFromCollection: async (): Promise<boolean> => true,
+  listNotesInCollection: async (collectionId: string): Promise<{ notes: NoteMeta[] }> => {
+    if (collectionId === "col-1") {
+      return { notes: [notes[0]] };
+    }
+    if (collectionId === "col-2") {
+      return { notes: [notes[1]] };
+    }
+    return { notes: [] };
+  },
+  getCollectionsForNote: async (noteId: string): Promise<Collection[]> => {
+    if (noteId === "note-1") return [mockCollections[0]];
+    if (noteId === "note-2") return [mockCollections[1], mockCollections[2]];
+    return [];
   },
 
   listActions: async (): Promise<unknown[]> => [],

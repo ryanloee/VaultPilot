@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNotesStore, useSettingsStore } from "@/lib/store";
 import { api } from "@/lib/tauri";
-import type { BacklinkEntry } from "@/types";
+import type { BacklinkEntry, Collection, NoteMeta } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
@@ -9,6 +9,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Markdown } from "@/components/chat/Markdown";
 import { TrashIcon } from "@/components/layout/icons";
 import { cn, formatDate } from "@/lib/utils";
+import { CollectionTree } from "./CollectionTree";
 
 export function NotesView() {
   const { notes, current, loading, error, loadList, open, saveCurrent, clearCurrent } =
@@ -21,6 +22,10 @@ export function NotesView() {
   const [draftTitle, setDraftTitle] = useState("");
   const [backlinks, setBacklinks] = useState<BacklinkEntry[]>([]);
   const [backlinksLoading, setBacklinksLoading] = useState(false);
+  const [collections, setCollections] = useState<Collection[]>([]);
+  const [selectedCollectionId, setSelectedCollectionId] = useState<string | null>(null);
+  const [collectionNotes, setCollectionNotes] = useState<NoteMeta[] | null>(null);
+  const [noteCollectionIds, setNoteCollectionIds] = useState<string[]>([]);
 
   useEffect(() => {
     loadList();
@@ -50,6 +55,57 @@ export function NotesView() {
       })
       .finally(() => {
         if (!cancelled) setBacklinksLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [current?.meta.id]);
+
+  // Load collections (hierarchical grouping, #2042).
+  const reloadCollections = () => {
+    api
+      .listCollections()
+      .then(setCollections)
+      .catch(() => setCollections([]));
+  };
+  useEffect(() => {
+    reloadCollections();
+  }, []);
+
+  // Load notes for the selected collection.
+  useEffect(() => {
+    if (!selectedCollectionId) {
+      setCollectionNotes(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .listNotesInCollection(selectedCollectionId, 500)
+      .then((r) => {
+        if (!cancelled) setCollectionNotes(r.notes);
+      })
+      .catch(() => {
+        if (!cancelled) setCollectionNotes([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCollectionId]);
+
+  // Load which collections the opened note belongs to.
+  useEffect(() => {
+    if (!current) {
+      setNoteCollectionIds([]);
+      return;
+    }
+    let cancelled = false;
+    api
+      .getCollectionsForNote(current.meta.id)
+      .then((cols) => {
+        if (!cancelled) setNoteCollectionIds(cols.map((c) => c.id));
+      })
+      .catch(() => {
+        if (!cancelled) setNoteCollectionIds([]);
       });
     return () => {
       cancelled = true;
@@ -87,20 +143,59 @@ export function NotesView() {
     }
   };
 
+  const handleToggleCollection = async (collectionId: string) => {
+    if (!current) return;
+    const isMember = noteCollectionIds.includes(collectionId);
+    try {
+      if (isMember) {
+        await api.removeNoteFromCollection(current.meta.id, collectionId);
+        setNoteCollectionIds((ids) => ids.filter((id) => id !== collectionId));
+      } else {
+        await api.addNoteToCollection(current.meta.id, collectionId);
+        setNoteCollectionIds((ids) => [...ids, collectionId]);
+      }
+      reloadCollections();
+    } catch (e) {
+      alert(`更新分类失败：${String(e)}`);
+    }
+  };
+
+  const handleSelectCollection = (id: string | null) => {
+    setSelectedCollectionId(id);
+    if (id === null) void loadList();
+  };
+
+  const displayedNotes = selectedCollectionId ? collectionNotes ?? [] : notes;
+
   return (
     <div className="flex h-full flex-col md:flex-row">
       {/* Notes list */}
       <ScrollArea
         className={cn(
-          "w-full shrink-0 border-r border-border md:w-64",
+          "w-full shrink-0 border-r border-border md:w-72",
           mobileDetail && "hidden md:block"
         )}
       >
-        <div className="border-b border-border px-3 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          笔记 ({notes.length})
-        </div>
+        {/* Hierarchical collections tree (#2042) */}
+        <CollectionTree
+          collections={collections}
+          selectedId={selectedCollectionId}
+          onSelect={handleSelectCollection}
+          onChange={reloadCollections}
+        />
+        <button
+          onClick={() => handleSelectCollection(null)}
+          className={cn(
+            "block w-full border-b border-border px-3 py-2 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:bg-accent",
+            selectedCollectionId === null && "bg-accent text-foreground"
+          )}
+        >
+          {selectedCollectionId
+            ? `← 全部笔记 (${notes.length})`
+            : `全部笔记 (${notes.length})`}
+        </button>
         {loading && <p className="px-3 py-2 text-xs text-muted-foreground">加载中…</p>}
-        {notes.map((n) => (
+        {displayedNotes.map((n) => (
           <button
             key={n.id}
             onClick={() => handleOpen(n.id)}
@@ -118,8 +213,10 @@ export function NotesView() {
             </div>
           </button>
         ))}
-        {!loading && notes.length === 0 && (
-          <p className="px-3 py-4 text-center text-xs text-muted-foreground">暂无笔记</p>
+        {!loading && displayedNotes.length === 0 && (
+          <p className="px-3 py-4 text-center text-xs text-muted-foreground">
+            {selectedCollectionId ? "该分类下暂无笔记" : "暂无笔记"}
+          </p>
         )}
       </ScrollArea>
 
@@ -197,6 +294,41 @@ export function NotesView() {
                 ) : (
                   <p className="text-sm text-muted-foreground">（空笔记）</p>
                 )}
+
+                {/* Collections membership (#2042) */}
+                <section className="mt-6 border-t border-border pt-4">
+                  <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    所属分类
+                  </h2>
+                  {collections.length === 0 ? (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      暂无分类 — 在左侧面板「+ 新建」创建
+                    </p>
+                  ) : (
+                    <ul className="mt-2 flex flex-wrap gap-2">
+                      {collections.map((c) => {
+                        const checked = noteCollectionIds.includes(c.id);
+                        return (
+                          <li key={c.id}>
+                            <button
+                              onClick={() => void handleToggleCollection(c.id)}
+                              className={cn(
+                                "rounded-full border px-3 py-1 text-xs transition-colors",
+                                checked
+                                  ? "border-primary bg-primary/10 text-primary"
+                                  : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
+                              )}
+                              title={checked ? "移出分类" : "加入分类"}
+                            >
+                              {checked ? "✓ " : "+ "}
+                              {c.name}
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </section>
 
                 {/* Backlinks panel (#4061) */}
                 <section className="mt-6 border-t border-border pt-4">

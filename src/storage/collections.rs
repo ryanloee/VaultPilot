@@ -1,8 +1,12 @@
 //! Collection CRUD — many-to-many note grouping layer (#2042).
 //!
-//! Collections are flat, user-defined groups that transcend the filesystem
-//! folder hierarchy. A note can belong to zero or more collections, and
-//! deleting a collection never deletes its member notes.
+//! Collections are user-defined groups that transcend the filesystem folder
+//! hierarchy. A note can belong to zero or more collections, and deleting a
+//! collection never deletes its member notes.
+//!
+//! Collections form a tree: `parent_id` is empty for root collections, and
+//! non-empty for nested (sub-)collections. Deleting a collection cascades to
+//! its children (they are removed too, notes are never deleted).
 
 #![allow(dead_code)]
 
@@ -30,13 +34,36 @@ pub fn create_collection_with_context(
     name: &str,
     description: &str,
 ) -> Result<Collection> {
+    create_collection_with_parent(context, name, description, "")
+}
+
+/// Create a new collection under `parent_id` (empty string = root).
+#[instrument(skip(context))]
+pub fn create_collection_with_parent(
+    context: &StorageContext,
+    name: &str,
+    description: &str,
+    parent_id: &str,
+) -> Result<Collection> {
     let (connection, _) = open_connection(context)?;
+    if !parent_id.is_empty() {
+        let parent_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM collections WHERE id = ?1)",
+                params![parent_id],
+                |row| row.get(0),
+            )
+            .with_context(|| format!("failed to check parent collection '{parent_id}'"))?;
+        if !parent_exists {
+            anyhow::bail!("parent collection '{parent_id}' does not exist");
+        }
+    }
     let now = Utc::now().to_rfc3339();
     let id = Uuid::new_v4().to_string();
 
     connection.execute(
-        "INSERT INTO collections (id, name, description, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![id, name, description, now, now],
+        "INSERT INTO collections (id, name, description, created_at, updated_at, parent_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![id, name, description, now, now, parent_id],
     ).with_context(|| format!("failed to create collection '{name}'"))?;
 
     Ok(Collection {
@@ -45,17 +72,21 @@ pub fn create_collection_with_context(
         description: description.to_string(),
         created_at: now.clone(),
         updated_at: now,
+        parent_id: parent_id.to_string(),
         note_count: 0,
     })
 }
 
 /// Delete a collection and all its note associations (cascade).
+/// Child collections are deleted recursively (cascade) — notes are never
+/// deleted.
 #[instrument(skip(context))]
 pub fn delete_collection_with_context(
     context: &StorageContext,
     collection_id: &str,
 ) -> Result<bool> {
     let (connection, _) = open_connection(context)?;
+    delete_collection_tree(&connection, collection_id)?;
     let rows = connection
         .execute(
             "DELETE FROM collections WHERE id = ?1",
@@ -63,6 +94,26 @@ pub fn delete_collection_with_context(
         )
         .with_context(|| format!("failed to delete collection '{collection_id}'"))?;
     Ok(rows > 0)
+}
+
+/// Recursively delete child collections (and their note associations via
+/// ON DELETE CASCADE), depth-first, so the root delete is the last statement.
+fn delete_collection_tree(connection: &rusqlite::Connection, collection_id: &str) -> Result<()> {
+    let mut stmt = connection.prepare("SELECT id FROM collections WHERE parent_id = ?1")?;
+    let children: Vec<String> = stmt
+        .query_map(params![collection_id], |row| row.get(0))
+        .with_context(|| format!("failed to query children of collection '{collection_id}'"))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .with_context(|| "failed to collect child collection ids")?;
+    drop(stmt);
+
+    for child in children {
+        delete_collection_tree(connection, &child)?;
+        connection
+            .execute("DELETE FROM collections WHERE id = ?1", params![child])
+            .with_context(|| format!("failed to delete child collection '{child}'"))?;
+    }
+    Ok(())
 }
 
 /// List all collections with their note counts.
@@ -73,7 +124,7 @@ pub fn list_collections_with_context(context: &StorageContext) -> Result<Vec<Col
     let mut stmt = connection.prepare(
         r#"
         SELECT
-            c.id, c.name, c.description, c.created_at, c.updated_at,
+            c.id, c.name, c.description, c.created_at, c.updated_at, c.parent_id,
             COALESCE(nc.cnt, 0) AS note_count
         FROM collections c
         LEFT JOIN (
@@ -93,7 +144,8 @@ pub fn list_collections_with_context(context: &StorageContext) -> Result<Vec<Col
                 description: row.get(2)?,
                 created_at: row.get(3)?,
                 updated_at: row.get(4)?,
-                note_count: row.get::<_, i64>(5)? as usize,
+                parent_id: row.get(5)?,
+                note_count: row.get::<_, i64>(6)? as usize,
             })
         })
         .with_context(|| "failed to query collections")?
@@ -115,7 +167,7 @@ pub fn get_collection_with_context(
         .query_row(
             r#"
             SELECT
-                c.id, c.name, c.description, c.created_at, c.updated_at,
+                c.id, c.name, c.description, c.created_at, c.updated_at, c.parent_id,
                 COALESCE(nc.cnt, 0) AS note_count
             FROM collections c
             LEFT JOIN (
@@ -133,7 +185,8 @@ pub fn get_collection_with_context(
                     description: row.get(2)?,
                     created_at: row.get(3)?,
                     updated_at: row.get(4)?,
-                    note_count: row.get::<_, i64>(5)? as usize,
+                    parent_id: row.get(5)?,
+                    note_count: row.get::<_, i64>(6)? as usize,
                 })
             },
         )
@@ -141,6 +194,87 @@ pub fn get_collection_with_context(
         .with_context(|| "failed to query collection")?;
 
     Ok(result)
+}
+
+/// Rename a collection. Returns `true` if renamed.
+#[instrument(skip(context))]
+pub fn rename_collection_with_context(
+    context: &StorageContext,
+    collection_id: &str,
+    name: &str,
+) -> Result<bool> {
+    let (connection, _) = open_connection(context)?;
+    let now = Utc::now().to_rfc3339();
+    let rows = connection
+        .execute(
+            "UPDATE collections SET name = ?1, updated_at = ?2 WHERE id = ?3",
+            params![name, now, collection_id],
+        )
+        .with_context(|| format!("failed to rename collection '{collection_id}'"))?;
+    Ok(rows > 0)
+}
+
+/// Move a collection under a new parent (`""` = root). Rejects cycles
+/// (moving a collection into itself or into its own descendant). Returns
+/// `false` when the collection does not exist.
+#[instrument(skip(context))]
+pub fn move_collection_with_context(
+    context: &StorageContext,
+    collection_id: &str,
+    new_parent_id: &str,
+) -> Result<bool> {
+    let (connection, _) = open_connection(context)?;
+    if collection_id == new_parent_id {
+        anyhow::bail!("cannot move collection into itself");
+    }
+    if !new_parent_id.is_empty() {
+        let parent_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM collections WHERE id = ?1)",
+                params![new_parent_id],
+                |row| row.get(0),
+            )
+            .with_context(|| format!("failed to check parent collection '{new_parent_id}'"))?;
+        if !parent_exists {
+            anyhow::bail!("parent collection '{new_parent_id}' does not exist");
+        }
+        // Cycle check: walk up from the target parent; if we ever reach
+        // `collection_id`, moving would create a cycle.
+        let mut current = new_parent_id.to_string();
+        let mut hops = 0usize;
+        loop {
+            if current == collection_id {
+                anyhow::bail!("cannot move collection into its own descendant");
+            }
+            let parent: Option<String> = connection
+                .query_row(
+                    "SELECT parent_id FROM collections WHERE id = ?1",
+                    params![current],
+                    |row| row.get(0),
+                )
+                .optional()
+                .with_context(|| format!("failed to read parent of '{current}'"))?;
+            match parent {
+                Some(p) if !p.is_empty() => {
+                    current = p;
+                    hops += 1;
+                    if hops > 10_000 {
+                        anyhow::bail!("collection parent chain too deep — cycle detected");
+                    }
+                }
+                _ => break,
+            }
+        }
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let rows = connection
+        .execute(
+            "UPDATE collections SET parent_id = ?1, updated_at = ?2 WHERE id = ?3",
+            params![new_parent_id, now, collection_id],
+        )
+        .with_context(|| format!("failed to move collection '{collection_id}'"))?;
+    Ok(rows > 0)
 }
 
 // ────────────────────────────────────────────────────────
@@ -290,7 +424,7 @@ pub fn get_collections_for_note_with_context(
 
     let mut stmt = connection.prepare(
         r#"
-        SELECT c.id, c.name, c.description, c.created_at, c.updated_at
+        SELECT c.id, c.name, c.description, c.created_at, c.updated_at, c.parent_id
         FROM collections c
         INNER JOIN note_collections nc ON nc.collection_id = c.id
         WHERE nc.note_id = ?1
@@ -306,6 +440,7 @@ pub fn get_collections_for_note_with_context(
                 description: row.get(2)?,
                 created_at: row.get(3)?,
                 updated_at: row.get(4)?,
+                parent_id: row.get(5)?,
                 note_count: 0,
             })
         })
@@ -359,11 +494,14 @@ pub async fn create_collection_async(
     ctx: &StorageContext,
     name: String,
     description: String,
+    parent_id: String,
 ) -> Result<Collection> {
     let ctx = ctx.clone();
-    tokio::task::spawn_blocking(move || create_collection_with_context(&ctx, &name, &description))
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
+    tokio::task::spawn_blocking(move || {
+        create_collection_with_parent(&ctx, &name, &description, &parent_id)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
 }
 
 pub async fn delete_collection_async(ctx: &StorageContext, collection_id: String) -> Result<bool> {
@@ -371,6 +509,32 @@ pub async fn delete_collection_async(ctx: &StorageContext, collection_id: String
     tokio::task::spawn_blocking(move || delete_collection_with_context(&ctx, &collection_id))
         .await
         .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
+}
+
+pub async fn rename_collection_async(
+    ctx: &StorageContext,
+    collection_id: String,
+    name: String,
+) -> Result<bool> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || {
+        rename_collection_with_context(&ctx, &collection_id, &name)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
+}
+
+pub async fn move_collection_async(
+    ctx: &StorageContext,
+    collection_id: String,
+    new_parent_id: String,
+) -> Result<bool> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || {
+        move_collection_with_context(&ctx, &collection_id, &new_parent_id)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
 }
 
 pub async fn list_collections_async(ctx: &StorageContext) -> Result<Vec<Collection>> {
@@ -580,6 +744,101 @@ mod tests {
         let cols = list_collections_with_context(&ctx).unwrap();
         assert_eq!(cols.len(), 1);
         assert_eq!(cols[0].note_count, 0);
+    }
+
+    #[test]
+    fn test_nested_collection_tree() {
+        let (_temp, ctx) = setup_temp_context();
+        crate::storage::initialize_storage_with_context(&ctx).unwrap();
+
+        let root = create_collection_with_parent(&ctx, "Root", "", "").unwrap();
+        let child = create_collection_with_parent(&ctx, "Child", "", &root.id).unwrap();
+        let grandchild =
+            create_collection_with_parent(&ctx, "Grandchild", "", &child.id).unwrap();
+
+        assert_eq!(root.parent_id, "");
+        assert_eq!(child.parent_id, root.id);
+        assert_eq!(grandchild.parent_id, child.id);
+
+        // Creating under a missing parent must fail.
+        assert!(create_collection_with_parent(&ctx, "Orphan", "", "nope").is_err());
+
+        let all = list_collections_with_context(&ctx).unwrap();
+        assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn test_move_collection_and_cycle_rejection() {
+        let (_temp, ctx) = setup_temp_context();
+        crate::storage::initialize_storage_with_context(&ctx).unwrap();
+
+        let a = create_collection_with_parent(&ctx, "A", "", "").unwrap();
+        let b = create_collection_with_parent(&ctx, "B", "", "").unwrap();
+        let c = create_collection_with_parent(&ctx, "C", "", "").unwrap();
+
+        // Move B under A, C under B.
+        assert!(move_collection_with_context(&ctx, &b.id, &a.id).unwrap());
+        assert!(move_collection_with_context(&ctx, &c.id, &b.id).unwrap());
+
+        let all = list_collections_with_context(&ctx).unwrap();
+        let a_now = all.iter().find(|x| x.id == a.id).unwrap();
+        let c_now = all.iter().find(|x| x.id == c.id).unwrap();
+        assert_eq!(a_now.parent_id, "");
+        assert_eq!(c_now.parent_id, b.id);
+
+        // Moving A into its own descendant C must be rejected (cycle).
+        assert!(move_collection_with_context(&ctx, &a.id, &c.id).is_err());
+        // Moving A into itself must be rejected.
+        assert!(move_collection_with_context(&ctx, &a.id, &a.id).is_err());
+        // Moving C back to root is fine.
+        assert!(move_collection_with_context(&ctx, &c.id, "").unwrap());
+        // Moving under a missing parent must fail.
+        assert!(move_collection_with_context(&ctx, &c.id, "missing").is_err());
+    }
+
+    #[test]
+    fn test_delete_collection_cascades_to_children() {
+        let (_temp, ctx) = setup_temp_context();
+        crate::storage::initialize_storage_with_context(&ctx).unwrap();
+
+        let root = create_collection_with_parent(&ctx, "Root", "", "").unwrap();
+        let child = create_collection_with_parent(&ctx, "Child", "", &root.id).unwrap();
+        let _grandchild = create_collection_with_parent(&ctx, "Grandchild", "", &child.id).unwrap();
+
+        // Attach a note to the grandchild to prove note associations cascade.
+        let note = crate::models::NoteDocument {
+            meta: crate::models::NoteMeta {
+                title: "Cascade Me".to_string(),
+                ..Default::default()
+            },
+            body: "body".to_string(),
+            ..Default::default()
+        };
+        let saved = save_note_with_context(&ctx, note).unwrap();
+        add_note_to_collection_with_context(&ctx, &saved.meta.id, &child.id).unwrap();
+
+        // Deleting the root removes the whole subtree.
+        assert!(delete_collection_with_context(&ctx, &root.id).unwrap());
+        assert!(list_collections_with_context(&ctx).unwrap().is_empty());
+
+        // The note itself must survive.
+        let loaded = crate::storage::load_note_with_context(&ctx, &saved.meta.id).unwrap();
+        assert_eq!(loaded.meta.title, "Cascade Me");
+    }
+
+    #[test]
+    fn test_rename_collection() {
+        let (_temp, ctx) = setup_temp_context();
+        crate::storage::initialize_storage_with_context(&ctx).unwrap();
+
+        let col = create_collection_with_parent(&ctx, "Old", "", "").unwrap();
+        assert!(rename_collection_with_context(&ctx, &col.id, "New").unwrap());
+        assert!(!rename_collection_with_context(&ctx, "missing", "X").unwrap());
+
+        let found = get_collection_with_context(&ctx, &col.id)
+            .unwrap()
+            .expect("exists");
+        assert_eq!(found.name, "New");
     }
 
     #[test]

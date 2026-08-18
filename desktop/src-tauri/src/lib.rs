@@ -115,6 +115,16 @@ pub fn run() {
             commands::notes::list_snapshots,
             commands::notes::get_snapshot,
             commands::notes::restore_snapshot,
+            // collections
+            commands::collections::list_collections,
+            commands::collections::create_collection,
+            commands::collections::rename_collection,
+            commands::collections::move_collection,
+            commands::collections::delete_collection,
+            commands::collections::add_note_to_collection,
+            commands::collections::remove_note_from_collection,
+            commands::collections::list_notes_in_collection,
+            commands::collections::get_collections_for_note,
             // chat
             commands::chat::load_chat_state,
             commands::chat::save_chat_state,

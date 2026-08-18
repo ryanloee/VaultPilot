@@ -339,6 +339,7 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
         )?;
         ensure_attachment_columns(connection)?;
         ensure_note_columns(connection)?;
+        ensure_collection_columns(connection)?;
         // #3440: ensure_trigger_rule_columns was only reachable during initial
         // schema creation (version 0 → 1). Databases created by older builds
         // (already at user_version = 1) that predate these columns would never
@@ -553,6 +554,11 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
     // before #3048 ship without these columns.
     ensure_trigger_rule_columns(connection)?;
 
+    // Idempotent migration: add hierarchical parent_id to collections for
+    // nested collection trees (sub-collections). Older databases created
+    // before this feature ship without the column.
+    ensure_collection_columns(connection)?;
+
     // Ensure mail tables for Email-to-Vault integration (feature-gated so
     // targets without OpenSSL, e.g. Android, still initialize cleanly).
     #[cfg(feature = "email")]
@@ -609,6 +615,38 @@ fn ensure_trigger_rule_columns(connection: &Connection) -> Result<()> {
             connection.execute_batch(ddl)?;
         }
     }
+    Ok(())
+}
+
+/// Add `parent_id` to the `collections` table if missing, enabling nested
+/// collection trees (#2042). Idempotent: checks PRAGMA table_info first.
+fn ensure_collection_columns(connection: &Connection) -> Result<()> {
+    let table_exists: bool = connection.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='collections'",
+        [],
+        |row| row.get(0),
+    )?;
+    if !table_exists {
+        return Ok(());
+    }
+
+    let mut statement = connection.prepare("PRAGMA table_info(collections)")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<HashSet<_>>>()?;
+    drop(statement);
+
+    if !columns.contains("parent_id") {
+        connection.execute(
+            "ALTER TABLE collections ADD COLUMN parent_id TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_collections_parent_id ON collections(parent_id)",
+        [],
+    )?;
+
     Ok(())
 }
 

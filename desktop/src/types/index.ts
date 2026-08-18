@@ -128,6 +128,18 @@ export type NoteMeta = {
   [key: string]: unknown;
 };
 
+/** Mirrors vaultpilot_lib::models::Collection (#2042). */
+export type Collection = {
+  id: string;
+  name: string;
+  description?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  /** Empty string = root collection. */
+  parentId?: string;
+  noteCount?: number;
+};
+
 export type NoteDocument = {
   meta: NoteMeta;
   body: string;

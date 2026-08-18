@@ -263,8 +263,11 @@ pub struct NoteMeta {
     pub collections: Vec<String>,
 }
 
-/// A named group of notes — a flat, many-to-many organizational layer
+/// A named group of notes — a hierarchical, many-to-many organizational layer
 /// separate from the filesystem folder hierarchy (#2042).
+///
+/// `parent_id` is empty for root collections; nested collections form a tree
+/// (sub-collections).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Collection {
@@ -273,6 +276,9 @@ pub struct Collection {
     pub description: String,
     pub created_at: String,
     pub updated_at: String,
+    /// Parent collection id; empty string for root collections.
+    #[serde(default)]
+    pub parent_id: String,
     /// Number of notes belonging to this collection (populated by list queries).
     #[serde(default)]
     pub note_count: usize,

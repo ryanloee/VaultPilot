@@ -102,11 +102,16 @@ pub use notes::{
 pub(crate) use search::list_all_note_metas;
 // Re-export collections public API so callers see no difference.
 pub use collections::{
-    add_note_to_collection_with_context, count_notes_in_collection_with_context,
-    create_collection_with_context, delete_collection_with_context, get_collection_ids_for_note,
-    get_collection_with_context, get_collections_for_note_with_context,
-    list_collections_with_context, list_notes_in_collection_with_context,
-    remove_note_from_collection_with_context,
+    add_note_to_collection_async, add_note_to_collection_with_context,
+    count_notes_in_collection_with_context, create_collection_async,
+    create_collection_with_context, create_collection_with_parent, delete_collection_async,
+    delete_collection_with_context, get_collection_ids_for_note, get_collection_with_context,
+    get_collections_for_note_with_context, list_collections_async,
+    list_collections_with_context, list_notes_in_collection_async,
+    list_notes_in_collection_with_context, move_collection_async,
+    move_collection_with_context, remove_note_from_collection_async,
+    remove_note_from_collection_with_context, rename_collection_async,
+    rename_collection_with_context,
 };
 // Re-export flashcards public API (#1912).
 pub use flashcards::{

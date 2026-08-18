@@ -4,6 +4,7 @@ import type {
   AppSettings,
   BacklinkEntry,
   ChatState,
+  Collection,
   ConversationSummary,
   ConversationTurn,
   NoteDocument,
@@ -112,6 +113,33 @@ export const tauriApi = {
   getSnapshot: (snapshotId: string) => invoke<unknown>("get_snapshot", { snapshotId }),
   restoreSnapshot: (noteId: string, snapshotId: string) =>
     invoke<NoteDocument>("restore_snapshot", { noteId, snapshotId }),
+
+  // ── collections ──
+  listCollections: () => invoke<Collection[]>("list_collections"),
+  createCollection: (name: string, description?: string, parentId?: string) =>
+    invoke<Collection>("create_collection", { name, description, parentId }),
+  renameCollection: (collectionId: string, name: string) =>
+    invoke<boolean>("rename_collection", { collectionId, name }),
+  moveCollection: (collectionId: string, newParentId?: string) =>
+    invoke<boolean>("move_collection", { collectionId, newParentId }),
+  deleteCollection: (collectionId: string) =>
+    invoke<boolean>("delete_collection", { collectionId }),
+  addNoteToCollection: (noteId: string, collectionId: string) =>
+    invoke<boolean>("add_note_to_collection", { noteId, collectionId }),
+  removeNoteFromCollection: (noteId: string, collectionId: string) =>
+    invoke<boolean>("remove_note_from_collection", { noteId, collectionId }),
+  listNotesInCollection: (
+    collectionId: string,
+    limit?: number,
+    offset?: number
+  ) =>
+    invoke<{ notes: NoteMeta[] }>("list_notes_in_collection", {
+      collectionId,
+      limit,
+      offset,
+    }),
+  getCollectionsForNote: (noteId: string) =>
+    invoke<Collection[]>("get_collections_for_note", { noteId }),
 };
 
 /**

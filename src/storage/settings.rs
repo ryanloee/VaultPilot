@@ -878,6 +878,13 @@ mod tests {
         // decrypt_secret returns an error, triggering the raw-JSON fallback
         // in save_settings_with_context.
         let bad_encrypted = "ENC:v1:not-valid-base64!!!";
+        // Unique provider name: decrypt_api_keys_with_fallback falls back to
+        // the OS keychain (KEYCHAIN.get(account_key(name))) when the disk
+        // value is an undecryptable ENC blob — a stale credential left by a
+        // previous test run / real app usage under a colliding name would
+        // overwrite the blob and break this test on developer machines
+        // (Windows Credential Manager persists across runs).
+        let provider_name = format!("masked-test-{}", std::process::id());
         // Build JSON with serde_json; use camelCase for both AppSettings and
         // ProviderConfig (both have #[serde(rename_all = "camelCase")]).
         let fake_settings = serde_json::json!({
@@ -886,7 +893,7 @@ mod tests {
             "provider": {
                 "apiKey": bad_encrypted,
                 "baseUrl": "https://api.example.com",
-                "name": "Test",
+                "name": provider_name,
                 "providerType": serde_json::Value::Null
             }
         });

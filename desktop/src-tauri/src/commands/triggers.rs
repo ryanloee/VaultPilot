@@ -4,7 +4,8 @@ use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use vaultpilot_lib::storage::{
     create_trigger_rule_with_context, delete_trigger_rule_with_context,
-    list_trigger_rules_with_context, toggle_trigger_rule_with_context,
+    initialize_storage_async, list_trigger_rules_with_context,
+    toggle_trigger_rule_with_context,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -45,6 +46,7 @@ impl From<vaultpilot_lib::orchestration::trigger::AgentTriggerRule> for TriggerR
 #[tauri::command]
 pub async fn list_trigger_rules(state: tauri::State<'_, AppState>) -> Result<Vec<TriggerRuleDto>, String> {
     let ctx = state.storage.clone();
+    initialize_storage_async(&ctx).await.map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
         list_trigger_rules_with_context(&ctx)
             .map(|rules| rules.into_iter().map(TriggerRuleDto::from).collect())
@@ -65,6 +67,7 @@ pub async fn create_trigger_rule(
     custom_prompt: Option<String>,
 ) -> Result<TriggerRuleDto, String> {
     let ctx = state.storage.clone();
+    initialize_storage_async(&ctx).await.map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
         create_trigger_rule_with_context(
             &ctx,
@@ -88,6 +91,7 @@ pub async fn toggle_trigger_rule(
     rule_id: String,
 ) -> Result<bool, String> {
     let ctx = state.storage.clone();
+    initialize_storage_async(&ctx).await.map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
         toggle_trigger_rule_with_context(&ctx, &rule_id)
             .map_err(|e| e.to_string())?
@@ -103,6 +107,7 @@ pub async fn delete_trigger_rule(
     rule_id: String,
 ) -> Result<bool, String> {
     let ctx = state.storage.clone();
+    initialize_storage_async(&ctx).await.map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
         delete_trigger_rule_with_context(&ctx, &rule_id).map_err(|e| e.to_string())
     })

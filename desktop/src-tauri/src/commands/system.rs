@@ -8,3 +8,10 @@ use crate::state::AppState;
 pub async fn ping(_state: tauri::State<'_, AppState>) -> Result<bool, String> {
     Ok(true)
 }
+
+/// Reports whether desktop-only integrations such as the updater are
+/// available. The updater plugin is not supported on Android/iOS.
+#[tauri::command]
+pub fn is_desktop() -> bool {
+    cfg!(desktop)
+}

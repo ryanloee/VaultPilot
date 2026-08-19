@@ -160,6 +160,7 @@ let mockCollections: Collection[] = [
 
 export const mockApi = {
   ping: async (): Promise<boolean> => true,
+  isDesktop: async (): Promise<boolean> => false,
 
   getSettings: async (): Promise<AppSettings> => JSON.parse(JSON.stringify(settings)),
   saveSettings: async (s: AppSettings): Promise<AppSettings> => {

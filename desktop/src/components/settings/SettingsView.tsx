@@ -6,6 +6,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/tauri";
+import { isTauri } from "@/lib/mock";
+import { checkForUpdates, installUpdate, type PendingUpdate } from "@/lib/updater";
 import { applyAndPersistTheme, savedTheme, type Theme } from "@/lib/theme";
 import type { AppSettings, ProviderConfig, ProviderConnectionResult } from "@/types";
 
@@ -15,6 +17,12 @@ export function SettingsView() {
   const [theme, setTheme] = useState<Theme>("system");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<ProviderConnectionResult | null>(null);
+  const [updaterAvailable, setUpdaterAvailable] = useState(false);
+  const [updateState, setUpdateState] = useState<
+    "idle" | "checking" | "latest" | "available" | "installing" | "installed" | "error"
+  >("idle");
+  const [pendingUpdate, setPendingUpdate] = useState<PendingUpdate | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
 
   // Apply + persist the theme when the user clicks a theme button.
   const selectTheme = (mode: Theme) => {
@@ -25,6 +33,19 @@ export function SettingsView() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!isTauri()) return;
+    api.isDesktop().then((available) => {
+      if (!cancelled) setUpdaterAvailable(available);
+    }).catch(() => {
+      if (!cancelled) setUpdaterAvailable(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (settings) {
@@ -62,6 +83,39 @@ export function SettingsView() {
   };
 
   const active = draft.providers[draft.activeProviderIndex] ?? draft.provider;
+
+  const handleCheckForUpdates = async () => {
+    if (updateState === "checking" || !updaterAvailable) return;
+    setUpdateState("checking");
+    setUpdateError(null);
+    setPendingUpdate(null);
+    try {
+      const update = await checkForUpdates();
+      if (update) {
+        setPendingUpdate(update);
+        setUpdateState("available");
+      } else {
+        setUpdateState("latest");
+      }
+    } catch (e) {
+      setUpdateState("error");
+      setUpdateError(String(e));
+    }
+  };
+
+  const handleInstallUpdate = async () => {
+    if (!pendingUpdate || updateState === "installing") return;
+    setUpdateState("installing");
+    setUpdateError(null);
+    try {
+      await installUpdate(pendingUpdate);
+      setPendingUpdate(null);
+      setUpdateState("installed");
+    } catch (e) {
+      setUpdateState("error");
+      setUpdateError(String(e));
+    }
+  };
 
   const handleTestConnection = async () => {
     if (testing) return;
@@ -233,6 +287,51 @@ export function SettingsView() {
               placeholder="附加到每次对话的系统提示词"
             />
           </Field>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={draft.autoCheckUpdates}
+              onChange={(e) => setDraft({ ...draft, autoCheckUpdates: e.target.checked })}
+            />
+            自动检查更新
+          </label>
+          <p className="text-xs text-muted-foreground">
+            应用启动时检查 GitHub 是否有新的桌面版本；关闭后不会自动下载更新。
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void handleCheckForUpdates()}
+              disabled={!updaterAvailable || updateState === "checking"}
+            >
+              {updateState === "checking" ? "检查中…" : "立即检查更新"}
+            </Button>
+            {pendingUpdate && (
+              <Button
+                size="sm"
+                onClick={() => void handleInstallUpdate()}
+                disabled={updateState === "installing"}
+              >
+                {updateState === "installing" ? "下载中…" : `下载 v${pendingUpdate.version} 并重启`}
+              </Button>
+            )}
+          </div>
+          {!updaterAvailable && (
+            <p className="text-xs text-muted-foreground">仅桌面端支持应用内更新。</p>
+          )}
+          {updateState === "latest" && (
+            <p className="text-xs text-green-600">当前已是最新版本。</p>
+          )}
+          {updateState === "available" && pendingUpdate && (
+            <p className="text-xs text-primary">
+              发现新版本 v{pendingUpdate.version}{pendingUpdate.body ? `：${pendingUpdate.body}` : "。"}
+            </p>
+          )}
+          {updateState === "installed" && (
+            <p className="text-xs text-green-600">更新已安装；下次启动将使用新版本。</p>
+          )}
+          {updateError && <p className="text-xs text-destructive">更新检查失败：{updateError}</p>}
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"

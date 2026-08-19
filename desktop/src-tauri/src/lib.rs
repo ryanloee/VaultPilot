@@ -16,10 +16,14 @@ use tauri::{Manager, WindowEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .setup(|app| {
+        .plugin(tauri_plugin_process::init());
+
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+
+    builder.setup(|app| {
             // On mobile (Android/iOS) the OS does not set the APPDATA /
             // LOCALAPPDATA / HOME environment variables that
             // `StorageContext::for_sidecar()` relies on. Bridge them to the
@@ -99,6 +103,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // system
             commands::system::ping,
+            commands::system::is_desktop,
             // settings
             commands::settings::get_settings,
             commands::settings::save_settings,

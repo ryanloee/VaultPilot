@@ -38,6 +38,7 @@ export type AgentStatusPayload = {
 export const tauriApi = {
   // ── system ──
   ping: () => invoke<boolean>("ping"),
+  isDesktop: () => invoke<boolean>("is_desktop"),
 
   // ── settings ──
   getSettings: () => invoke<AppSettings>("get_settings"),

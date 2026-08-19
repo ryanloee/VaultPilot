@@ -23,3 +23,6 @@ artifacts/
 
 # ZCode agent workspace
 .zcode/
+
+# Agent runtime sessions
+.omo/

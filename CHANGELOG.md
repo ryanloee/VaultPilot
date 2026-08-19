@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.30] - 2026-08-19
+
+### Added
+- Desktop: auto-update respects `autoCheckUpdates` setting — manual check button in Settings with version display and release notes.
+- Desktop: `is_desktop` command for platform detection; updater plugin only registers on desktop builds.
+- Desktop: `tauri-plugin-process` registered with `process:default` capability for `relaunch()` support.
+- Mobile: "定时唤醒" (Triggers) tab added to the bottom navigation bar (was desktop-only).
+- Git: `.omo/` agent session directory added to `.gitignore`.
+
+### Fixed
+- Updater plugin now conditionally compiled (`#[cfg(desktop)]`) to avoid Android/iOS build failures.
+- `useAutoUpdater` hook now checks platform and user preference before calling the updater API.
+
 ### Added
 - Mobile: Template Snippets (Phase 1, #2154) — reusable note templates with variable substitution.
   - Templates are notes flagged `is_template=1`; excluded from regular list/search.

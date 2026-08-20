@@ -85,6 +85,25 @@ describe("mockApi notes CRUD", () => {
   });
 });
 
+describe("mockApi trigger rules", () => {
+  it("updateTriggerRule returns the rule with the new values", async () => {
+    const updated = await mockApi.updateTriggerRule(
+      "mock-trigger-1",
+      "改后的回顾",
+      "cron",
+      "30 18 * * 1-5",
+      "custom",
+      undefined,
+      "总结今天"
+    );
+    expect(updated.id).toBe("mock-trigger-1");
+    expect(updated.label).toBe("改后的回顾");
+    expect(updated.triggerConfig).toBe("30 18 * * 1-5");
+    expect(updated.action).toBe("custom");
+    expect(updated.customPrompt).toBe("总结今天");
+  });
+});
+
 describe("isTauri", () => {
   it("returns false in a plain Node test environment (no window.__TAURI_INTERNALS__)", () => {
     expect(isTauri()).toBe(false);

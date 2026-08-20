@@ -139,8 +139,10 @@ pub use feeds::{
 // Re-export trigger_rules public API (#2984).
 pub use trigger_rules::{
     create_trigger_rule_with_context, delete_trigger_rule_with_context,
-    get_trigger_rule_with_context, list_trigger_rules_with_context,
-    toggle_trigger_rule_with_context,
+    get_trigger_rule_with_context, list_recent_trigger_executions_with_context,
+    list_trigger_rules_with_context, list_trigger_rules_with_status_with_context,
+    toggle_trigger_rule_with_context, update_trigger_rule_with_context, TriggerExecutionRecord,
+    TriggerRuleStatus,
 };
 // Re-export skills public API (#3068).
 pub use skills::{
@@ -274,11 +276,33 @@ pub(crate) struct Frontmatter {
 pub fn initialize_storage_with_context(context: &StorageContext) -> Result<AppSettings> {
     let settings = settings::load_settings_with_context(context)?;
     // Obtain a connection from the pool (pool handles PRAGMAs via with_init).
-    let connection = context
+    let mut connection = context
         .pool
         .get()
         .with_context(|| "failed to get connection from pool")?;
+    // v2 migration gate: databases at v1 indexed FTS text with unicode61
+    // only, which folds contiguous CJK into single tokens — Chinese term
+    // queries silently miss. Re-tokenize once (bodies re-read from disk).
+    let prev_version: i32 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap_or(0);
     pool::ensure_schema(&connection)?;
+    if prev_version == 1 {
+        match notes::migrate_fts_bigram_with_connection(&mut connection) {
+            Ok(count) => {
+                tracing::info!(
+                    notes = count,
+                    "migrated FTS indexes to CJK bigram tokenization (schema v2)"
+                );
+                connection.execute_batch("PRAGMA user_version = 2;")?;
+            }
+            Err(e) => {
+                // Leave the version at 1 so the migration retries on the
+                // next open instead of silently skipping.
+                tracing::warn!(error = %e, "FTS bigram migration failed; will retry next open");
+            }
+        }
+    }
     fs::create_dir_all(&settings.vault_dir)?;
     Ok(settings)
 }

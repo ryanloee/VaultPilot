@@ -11,6 +11,7 @@ import type {
   NoteMeta,
   ProviderConnectionResult,
   RelatedNote,
+  TriggerExecution,
   TriggerRule,
 } from "@/types";
 import { isTauri, mockApi } from "./mock";
@@ -21,6 +22,9 @@ export type GroundedAnswer = {
   citations?: unknown[];
   savedNote?: NoteMeta;
   usedContextCount: number;
+  /** Provider-reported token usage for the whole answer pipeline. */
+  usageInputTokens?: number;
+  usageOutputTokens?: number;
   [key: string]: unknown;
 };
 
@@ -145,6 +149,8 @@ export const tauriApi = {
 
   // ── triggers ──
   listTriggerRules: () => invoke<TriggerRule[]>("list_trigger_rules"),
+  listTriggerExecutions: (limit?: number) =>
+    invoke<TriggerExecution[]>("list_trigger_executions", { limit }),
   createTriggerRule: (
     label: string,
     triggerType: string,
@@ -165,6 +171,24 @@ export const tauriApi = {
     invoke<boolean>("toggle_trigger_rule", { ruleId }),
   deleteTriggerRule: (ruleId: string) =>
     invoke<boolean>("delete_trigger_rule", { ruleId }),
+  updateTriggerRule: (
+    ruleId: string,
+    label: string,
+    triggerType: string,
+    triggerConfig: string,
+    action: string,
+    filter?: string,
+    customPrompt?: string
+  ) =>
+    invoke<TriggerRule>("update_trigger_rule", {
+      ruleId,
+      label,
+      triggerType,
+      triggerConfig,
+      action,
+      filter,
+      customPrompt,
+    }),
 };
 
 /**

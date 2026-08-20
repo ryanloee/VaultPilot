@@ -597,6 +597,16 @@ pub struct GroundedAnswer {
     #[serde(default)]
     pub context_status: Option<ContextStatus>,
     pub used_context_count: usize,
+    /// Total input tokens consumed by the underlying provider calls for this
+    /// answer (tool-selection rounds + final answer). `None` when the
+    /// provider did not report usage. Lets callers (e.g. the trigger
+    /// executor) attribute quota consumption.
+    #[serde(default)]
+    pub usage_input_tokens: Option<usize>,
+    /// Total output tokens consumed for this answer (see
+    /// [`Self::usage_input_tokens`]).
+    #[serde(default)]
+    pub usage_output_tokens: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1166,6 +1176,8 @@ mod tests {
             thinking_trace: None,
             context_status: None,
             used_context_count: 0,
+            usage_input_tokens: None,
+            usage_output_tokens: None,
         };
         let json = serde_json::to_string(&with_none).expect("serialize");
         let parsed: GroundedAnswer = serde_json::from_str(&json).expect("deserialize");
@@ -1193,12 +1205,16 @@ mod tests {
                 last_request_output_tokens: Some(100),
             }),
             used_context_count: 3,
+            usage_input_tokens: Some(120),
+            usage_output_tokens: Some(40),
         };
         let json2 = serde_json::to_string(&with_some).expect("serialize");
         let parsed2: GroundedAnswer = serde_json::from_str(&json2).expect("deserialize");
         assert!(parsed2.saved_note.is_some());
         assert!(parsed2.thinking_trace.is_some());
         assert_eq!(parsed2.used_context_count, 3);
+        assert_eq!(parsed2.usage_input_tokens, Some(120));
+        assert_eq!(parsed2.usage_output_tokens, Some(40));
     }
 
     #[test]

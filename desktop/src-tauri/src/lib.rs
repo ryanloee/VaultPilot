@@ -23,7 +23,8 @@ pub fn run() {
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
 
-    builder.setup(|app| {
+    builder
+        .setup(|app| {
             // On mobile (Android/iOS) the OS does not set the APPDATA /
             // LOCALAPPDATA / HOME environment variables that
             // `StorageContext::for_sidecar()` relies on. Bridge them to the
@@ -47,7 +48,22 @@ pub fn run() {
             // (e.g. config dir not writable) surfaces as a visible error rather
             // than a silent crash inside the first command.
             let state = AppState::new().expect("failed to initialize app state");
-            app.manage(state);
+            app.manage(state.clone());
+
+            // Spawn the trigger-rule scheduler so cron rules actually fire in
+            // the desktop app. The rules UI only persists rows in
+            // `trigger_rules` — without this loop nothing ever evaluates
+            // them (previously only the CLI's `trigger start` command ran an
+            // executor, so rules created in the app silently never fired).
+            // It runs for the whole app session on the Tauri async runtime;
+            // close-to-tray keeps the process (and thus the scheduler) alive.
+            tauri::async_runtime::spawn(async move {
+                let executor =
+                    vaultpilot_lib::orchestration::trigger_executor::TriggerExecutor::new(
+                        (*state.storage).clone(),
+                    );
+                executor.run_forever().await;
+            });
 
             // System tray so the app keeps running in the background when the
             // main window is closed (close-to-tray, desktop only).
@@ -143,7 +159,9 @@ pub fn run() {
             commands::chat::transcribe_audio,
             // triggers
             commands::triggers::list_trigger_rules,
+            commands::triggers::list_trigger_executions,
             commands::triggers::create_trigger_rule,
+            commands::triggers::update_trigger_rule,
             commands::triggers::toggle_trigger_rule,
             commands::triggers::delete_trigger_rule,
         ])

@@ -37,7 +37,7 @@ use crate::prompting;
 
 use client::{send_request, send_request_with_temperature};
 use parsing::{
-    enrich_citations, extract_json, parse_or_fallback_answer, parse_or_fallback_note,
+    enrich_citations, extract_json, parse_model_answer, parse_or_fallback_note,
     parse_record_response, parse_tool_call, CompressionResponse, NoteSelectionResponse,
 };
 
@@ -325,7 +325,9 @@ pub async fn answer_question(
     };
 
     let response = send_request(settings, &system, &prompt, image_paths).await?;
-    let parsed = parse_or_fallback_answer(&response.text, question, docs.is_empty());
+    // Strict: an empty model answer is a failed call — never substituted
+    // with canned local text (user-facing "no fabricated answers" policy).
+    let parsed = parse_model_answer(&response.text)?;
 
     Ok(ChatAnswerResult {
         answer: parsed.answer,
@@ -355,7 +357,7 @@ pub async fn answer_after_tool(
     let prompt =
         prompting::tool_result_user_prompt(question, tool_name, tool_result, docs, history);
     let response = send_request(settings, &system, &prompt, &[]).await?;
-    let parsed = parse_or_fallback_answer(&response.text, question, docs.is_empty());
+    let parsed = parse_model_answer(&response.text)?;
 
     Ok(ChatAnswerResult {
         answer: parsed.answer,
@@ -383,7 +385,7 @@ pub async fn answer_after_tools(
     );
     let prompt = prompting::multi_tool_result_user_prompt(question, tool_results, docs, history);
     let response = send_request(settings, &system, &prompt, &[]).await?;
-    let parsed = parse_or_fallback_answer(&response.text, question, docs.is_empty());
+    let parsed = parse_model_answer(&response.text)?;
 
     Ok(ChatAnswerResult {
         answer: parsed.answer,
@@ -548,10 +550,9 @@ mod tests {
         is_openai_reasoning_model, resolve_context_window, resolve_max_output_tokens,
     };
     use super::parsing::{
-        dedupe_terms, extract_json, extract_json_block, fallback_answer,
-        generate_programmatic_snippet, heuristic_note_from_input, normalize_draft,
-        parse_or_fallback_answer, parse_or_fallback_note, parse_record_response, parse_tool_call,
-        AssistantToolCall,
+        dedupe_terms, extract_json, extract_json_block, generate_programmatic_snippet,
+        heuristic_note_from_input, normalize_draft, parse_model_answer, parse_or_fallback_note,
+        parse_record_response, parse_tool_call, AssistantToolCall,
     };
     use crate::models::{AppSettings, ProviderConfig, StructuredNoteDraft};
 
@@ -643,12 +644,6 @@ mod tests {
     }
 
     #[test]
-    fn fallback_mentions_direct_answer_when_no_context() {
-        let text = fallback_answer("我之前怎么做的", true);
-        assert!(text.contains("直接回答"));
-    }
-
-    #[test]
     fn heuristically_builds_note_for_command_records() {
         let draft =
             heuristic_note_from_input("我发送刷机命令你记录一下，wboot -w update zboot.img");
@@ -658,8 +653,16 @@ mod tests {
 
     #[test]
     fn uses_plain_text_when_model_does_not_return_json() {
-        let parsed = parse_or_fallback_answer("你好，我记住了。", "记录一下", true);
+        let parsed = parse_model_answer("你好，我记住了。").expect("plain text");
         assert_eq!(parsed.answer, "你好，我记住了。");
+    }
+
+    #[test]
+    fn empty_model_answer_is_failure_not_fabricated() {
+        // "No fabricated answers" policy: an empty provider response must
+        // surface as an error instead of canned local text.
+        assert!(parse_model_answer("").is_err());
+        assert!(parse_model_answer(r#"{"answer":"","citations":[]}"#).is_err());
     }
 
     #[test]
@@ -767,9 +770,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_or_fallback_answer_extracts_citations() {
+    fn parse_model_answer_extracts_citations() {
         let json = r#"{"answer":"参见笔记","citations":[{"noteId":"n1","title":"T","path":"/p.md","snippet":"s"}]}"#;
-        let parsed = parse_or_fallback_answer(json, "问题", true);
+        let parsed = parse_model_answer(json).expect("structured answer");
         assert_eq!(parsed.answer, "参见笔记");
         assert_eq!(parsed.citations.len(), 1);
         assert_eq!(parsed.citations[0].note_id, "n1");

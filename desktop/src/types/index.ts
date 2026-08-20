@@ -170,6 +170,25 @@ export type TriggerRule = {
   action: string;
   enabled: boolean;
   customPrompt?: string;
+  /** Scheduler status — answers "did it fire, and did it work?" */
+  lastFiredAt?: string;
+  nextFireAt?: string;
+  runCount?: number;
+  lastStatus?: "success" | "failed" | string;
+  lastError?: string;
+};
+
+/** One row of the trigger execution log (newest first). */
+export type TriggerExecution = {
+  id: string;
+  ruleId: string;
+  label: string;
+  action: string;
+  /** RFC3339 timestamp. */
+  firedAt: string;
+  status: "success" | "failed" | string;
+  error: string;
+  detail: string;
 };
 
 // ── Agent status event (streamed during askWithAi / runAgent) ─────────────

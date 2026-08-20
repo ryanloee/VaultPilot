@@ -7,6 +7,7 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 use rusqlite::{params, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use uuid::Uuid;
 
@@ -30,6 +31,7 @@ pub fn create_trigger_rule_with_context(
     filter: Option<&str>, // optional tag/content filter for event triggers
     custom_prompt: Option<&str>,
 ) -> Result<AgentTriggerRule> {
+    validate_trigger_config(trigger_type, trigger_config)?;
     let (connection, _) = open_connection(context)?;
     let now = Utc::now().to_rfc3339();
     let id = Uuid::new_v4().to_string();
@@ -159,6 +161,190 @@ pub fn delete_trigger_rule_with_context(context: &StorageContext, id: &str) -> R
     Ok(rows > 0)
 }
 
+/// Update an existing trigger rule's user-editable fields (label, trigger,
+/// action, filter, custom prompt). Returns the updated rule, or `None` when
+/// no rule with `id` exists.
+///
+/// Scheduler bookkeeping is intentionally **not** touched: `enabled`,
+/// `run_count`, `last_fired_at` and `conditions` keep their values, so
+/// editing a rule mid-schedule never resets its fire history or toggles it
+/// off. (Changing the cron expression is safe: the executor compares the new
+/// schedule's most recent due time against the preserved `last_fired_at`,
+/// so the rule fires at the next new-schedule occurrence.)
+#[instrument(skip(context))]
+#[allow(clippy::too_many_arguments)]
+pub fn update_trigger_rule_with_context(
+    context: &StorageContext,
+    id: &str,
+    label: &str,
+    trigger_type: &str,
+    trigger_config: &str,
+    action: &str,
+    filter: Option<&str>,
+    custom_prompt: Option<&str>,
+) -> Result<Option<AgentTriggerRule>> {
+    validate_trigger_config(trigger_type, trigger_config)?;
+    let (connection, _) = open_connection(context)?;
+    let now = Utc::now().to_rfc3339();
+    let rows = connection
+        .execute(
+            "UPDATE trigger_rules \
+             SET label = ?1, trigger_type = ?2, trigger_config = ?3, filter = ?4, \
+                 action = ?5, custom_prompt = ?6, updated_at = ?7 \
+             WHERE id = ?8",
+            params![
+                label,
+                trigger_type,
+                trigger_config,
+                filter,
+                action,
+                custom_prompt,
+                now,
+                id
+            ],
+        )
+        .with_context(|| format!("failed to update trigger rule '{id}'"))?;
+    if rows == 0 {
+        return Ok(None);
+    }
+    get_trigger_rule_with_context(context, id)
+}
+
+/// Scheduler bookkeeping for one rule — the columns the background executor
+/// updates on every fire. Returned alongside the rule so UIs can show
+/// "did it fire, and did it work?" without querying the execution log.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TriggerRuleStatus {
+    /// RFC3339 timestamp of the last fire (or attempt), if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_fired_at: Option<String>,
+    /// RFC3339 timestamp of the next scheduled fire (cron rules only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_fire_at: Option<String>,
+    /// Total recorded fires/attempts.
+    pub run_count: i64,
+    /// `"success"` / `"failed"` from the most recent execution, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_status: Option<String>,
+    /// Error message from the most recent failed execution, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
+/// List all trigger rules together with their scheduler status columns.
+#[instrument(skip(context))]
+pub fn list_trigger_rules_with_status_with_context(
+    context: &StorageContext,
+) -> Result<Vec<(AgentTriggerRule, TriggerRuleStatus)>> {
+    let (connection, _) = open_connection(context)?;
+
+    let mut stmt = connection.prepare(
+        r#"
+        SELECT id, label, trigger_type, trigger_config, filter, action, enabled, custom_prompt,
+               created_at, updated_at, conditions,
+               last_fired_at, next_fire_at, run_count, last_status, last_error
+        FROM trigger_rules
+        ORDER BY created_at DESC
+        "#,
+    )?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            let rule = build_rule(
+                &row.get::<_, String>(0)?,
+                &row.get::<_, String>(1)?,
+                &row.get::<_, String>(2)?,
+                &row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?.as_deref(),
+                &row.get::<_, String>(5)?,
+                row.get::<_, i32>(6)? != 0,
+                row.get::<_, Option<String>>(7)?.as_deref(),
+                &row.get::<_, String>(8)?,
+                &row.get::<_, String>(9)?,
+                row.get::<_, Option<String>>(10)?.as_deref(),
+            );
+            let non_empty = |v: Option<String>| v.filter(|s| !s.is_empty());
+            let mut status = TriggerRuleStatus {
+                last_fired_at: non_empty(row.get(11)?),
+                next_fire_at: non_empty(row.get(12)?),
+                run_count: row.get(13)?,
+                last_status: non_empty(row.get(14)?),
+                last_error: non_empty(row.get(15)?),
+            };
+            // The stored `next_fire_at` column is only recomputed on fire, so
+            // it goes stale when a rule is edited (and is empty for
+            // never-fired rules). Recompute it from the current expression
+            // for enabled cron rules so the UI always shows the real next
+            // fire time; disabled / event rules have none.
+            status.next_fire_at = match (&rule.trigger, rule.enabled) {
+                (crate::orchestration::trigger::TriggerKind::Cron { expression }, true) => {
+                    crate::orchestration::trigger_executor::next_due_time_at(expression, Utc::now())
+                        .map(|dt| dt.to_rfc3339())
+                }
+                _ => None,
+            };
+            Ok((rule, status))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("failed to collect trigger rules with status")?;
+
+    Ok(rows)
+}
+
+/// One row of the trigger execution log (what the background executor
+/// records each time a rule fires).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TriggerExecutionRecord {
+    pub id: String,
+    pub rule_id: String,
+    pub label: String,
+    pub action: String,
+    /// RFC3339 timestamp.
+    pub fired_at: String,
+    /// `"success"` / `"failed"` (#3055 contract).
+    pub status: String,
+    pub error: String,
+    pub detail: String,
+}
+
+/// List the most recent execution-log rows, newest first. This is the
+/// user-facing answer to "did my scheduled task actually run?".
+#[instrument(skip(context))]
+pub fn list_recent_trigger_executions_with_context(
+    context: &StorageContext,
+    limit: u32,
+) -> Result<Vec<TriggerExecutionRecord>> {
+    let (connection, _) = open_connection(context)?;
+    let limit = limit.clamp(1, 200) as i32;
+
+    let mut stmt = connection.prepare(
+        r#"
+        SELECT id, rule_id, label, action, fired_at, status, error, detail
+        FROM trigger_executions
+        ORDER BY fired_at DESC
+        LIMIT ?1
+        "#,
+    )?;
+
+    let rows = stmt
+        .query_map(params![limit], |row| {
+            Ok(TriggerExecutionRecord {
+                id: row.get(0)?,
+                rule_id: row.get(1)?,
+                label: row.get(2)?,
+                action: row.get(3)?,
+                fired_at: row.get(4)?,
+                status: row.get(5)?,
+                error: row.get(6)?,
+                detail: row.get(7)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("failed to collect trigger executions")?;
+
+    Ok(rows)
+}
+
 /// Toggle a trigger rule's enabled state. Returns the new enabled state.
 #[instrument(skip(context))]
 pub fn toggle_trigger_rule_with_context(
@@ -193,6 +379,32 @@ pub fn toggle_trigger_rule_with_context(
 // ────────────────────────────────────────────────────────
 // Internal helpers
 // ────────────────────────────────────────────────────────
+
+/// Validate user-supplied trigger configuration before persisting.
+///
+/// An invalid cron expression would otherwise be accepted silently and then
+/// never fire (the executor's `Schedule::from_str` fails → the rule is never
+/// due) — the exact "stored but nothing happens" trap. Event triggers only
+/// need a non-empty event name.
+fn validate_trigger_config(trigger_type: &str, trigger_config: &str) -> Result<()> {
+    if trigger_type == "event" {
+        if trigger_config.trim().is_empty() {
+            return Err(anyhow::anyhow!(
+                "event trigger requires a non-empty event name"
+            ));
+        }
+        return Ok(());
+    }
+    // "cron" (and anything else, for backward compat) is treated as cron.
+    if crate::orchestration::trigger_executor::next_due_time_at(trigger_config, Utc::now())
+        .is_none()
+    {
+        return Err(anyhow::anyhow!(
+            "invalid cron expression: '{trigger_config}' (expected 5-field 'min hour dom mon dow', e.g. '0 8 * * *')"
+        ));
+    }
+    Ok(())
+}
 
 #[allow(clippy::too_many_arguments)]
 fn build_rule(
@@ -387,5 +599,310 @@ mod tests {
         let (_tmp, ctx) = setup_context();
         let result = toggle_trigger_rule_with_context(&ctx, "nonexistent-id").expect("toggle");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_update_trigger_rule() {
+        let (_tmp, ctx) = setup_context();
+        let rule = create_trigger_rule_with_context(
+            &ctx,
+            "Morning Review",
+            "cron",
+            "0 8 * * *",
+            "daily_review",
+            None,
+            None,
+        )
+        .expect("create rule");
+
+        let updated = update_trigger_rule_with_context(
+            &ctx,
+            &rule.id,
+            "Evening Review",
+            "cron",
+            "30 18 * * 1-5",
+            "custom",
+            None,
+            Some("Summarize the workday"),
+        )
+        .expect("update rule")
+        .expect("rule should exist");
+        assert_eq!(updated.label, "Evening Review");
+        assert_eq!(updated.action, TriggerAction::Custom);
+        assert_eq!(updated.effective_prompt(), Some("Summarize the workday"));
+        match &updated.trigger {
+            TriggerKind::Cron { expression } => assert_eq!(expression, "30 18 * * 1-5"),
+            _ => panic!("expected cron trigger"),
+        }
+
+        // The persisted state must reflect the update.
+        let reloaded = get_trigger_rule_with_context(&ctx, &rule.id)
+            .expect("get rule")
+            .expect("rule exists");
+        assert_eq!(reloaded.label, "Evening Review");
+        assert_eq!(reloaded.effective_prompt(), Some("Summarize the workday"));
+    }
+
+    #[test]
+    fn test_update_nonexistent_rule_returns_none() {
+        let (_tmp, ctx) = setup_context();
+        let result = update_trigger_rule_with_context(
+            &ctx,
+            "nonexistent-id",
+            "X",
+            "cron",
+            "0 8 * * *",
+            "daily_review",
+            None,
+            None,
+        )
+        .expect("update should not error");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_update_preserves_enabled_and_fire_history() {
+        // Editing a rule must not reset its scheduler bookkeeping: a disabled
+        // rule stays disabled, and run_count / last_fired_at survive.
+        let (_tmp, ctx) = setup_context();
+        let rule = create_trigger_rule_with_context(
+            &ctx,
+            "Keep State",
+            "cron",
+            "0 8 * * *",
+            "daily_review",
+            None,
+            None,
+        )
+        .expect("create rule");
+
+        toggle_trigger_rule_with_context(&ctx, &rule.id).expect("toggle off");
+        {
+            let (conn, _) = open_connection(&ctx).unwrap();
+            conn.execute(
+                "UPDATE trigger_rules SET run_count = 5, last_fired_at = '2026-08-01T08:00:00Z' \
+                 WHERE id = ?1",
+                params![&rule.id],
+            )
+            .unwrap();
+        }
+
+        update_trigger_rule_with_context(
+            &ctx,
+            &rule.id,
+            "Renamed",
+            "cron",
+            "0 9 * * *",
+            "daily_review",
+            None,
+            None,
+        )
+        .expect("update rule")
+        .expect("rule exists");
+
+        let (conn, _) = open_connection(&ctx).unwrap();
+        let (enabled, run_count, last_fired): (i32, i64, String) = conn
+            .query_row(
+                "SELECT enabled, run_count, last_fired_at FROM trigger_rules WHERE id = ?1",
+                params![&rule.id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(enabled, 0, "disabled rule must stay disabled after edit");
+        assert_eq!(run_count, 5, "run_count must survive an edit");
+        assert_eq!(
+            last_fired, "2026-08-01T08:00:00Z",
+            "last_fired_at must survive an edit"
+        );
+    }
+
+    #[test]
+    fn test_list_rules_with_status_reflects_fires() {
+        let (_tmp, ctx) = setup_context();
+        create_trigger_rule_with_context(
+            &ctx,
+            "Status Rule",
+            "cron",
+            "0 9 * * *",
+            "daily_review",
+            None,
+            None,
+        )
+        .expect("create rule");
+
+        // Before any fire the status columns are empty/zero.
+        let before = list_trigger_rules_with_status_with_context(&ctx).expect("list with status");
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].1.run_count, 0);
+        assert!(before[0].1.last_fired_at.is_none());
+        assert!(before[0].1.last_status.is_none());
+
+        // Fire once via the record-only executor path.
+        use crate::orchestration::trigger_executor::fire_due_rules_at;
+        let now = chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 7, 18, 9, 30, 0).unwrap();
+        fire_due_rules_at(&ctx, now).expect("fire");
+
+        let after = list_trigger_rules_with_status_with_context(&ctx).expect("list with status");
+        assert_eq!(after[0].1.run_count, 1);
+        assert_eq!(after[0].1.last_status.as_deref(), Some("success"));
+        assert!(after[0].1.last_fired_at.is_some());
+        assert!(after[0].1.next_fire_at.is_some());
+    }
+
+    #[test]
+    fn test_create_rejects_invalid_cron() {
+        // An invalid expression must be rejected at write time — otherwise it
+        // is stored silently and never fires (the executor cannot parse it),
+        // the exact "rule exists but nothing happens" trap.
+        let (_tmp, ctx) = setup_context();
+        let err = create_trigger_rule_with_context(
+            &ctx,
+            "Bad Cron",
+            "cron",
+            "not a cron",
+            "daily_review",
+            None,
+            None,
+        )
+        .expect_err("invalid cron must be rejected");
+        assert!(err.to_string().contains("invalid cron"), "got: {err}");
+
+        // Nothing was persisted.
+        let rules = list_trigger_rules_with_context(&ctx).expect("list");
+        assert!(rules.is_empty());
+    }
+
+    #[test]
+    fn test_update_rejects_invalid_cron() {
+        let (_tmp, ctx) = setup_context();
+        let rule = create_trigger_rule_with_context(
+            &ctx,
+            "Good Rule",
+            "cron",
+            "0 8 * * *",
+            "daily_review",
+            None,
+            None,
+        )
+        .expect("create rule");
+
+        let err = update_trigger_rule_with_context(
+            &ctx,
+            &rule.id,
+            "Renamed",
+            "cron",
+            "99 99 * * *",
+            "daily_review",
+            None,
+            None,
+        )
+        .expect_err("invalid cron must be rejected on update");
+        assert!(err.to_string().contains("invalid cron"), "got: {err}");
+
+        // The original rule is untouched.
+        let reloaded = get_trigger_rule_with_context(&ctx, &rule.id)
+            .expect("get")
+            .expect("exists");
+        match &reloaded.trigger {
+            TriggerKind::Cron { expression } => assert_eq!(expression, "0 8 * * *"),
+            _ => panic!("expected cron trigger"),
+        }
+    }
+
+    #[test]
+    fn test_status_next_fire_recomputed_fresh() {
+        // next_fire_at must reflect the rule's *current* expression even
+        // before the first fire and after an edit — not the stale column
+        // written at the last fire.
+        let (_tmp, ctx) = setup_context();
+        let rule = create_trigger_rule_with_context(
+            &ctx,
+            "Fresh Next",
+            "cron",
+            "0 9 * * *",
+            "daily_review",
+            None,
+            None,
+        )
+        .expect("create rule");
+
+        // Never fired: fresh computation still yields a next-fire time.
+        let rows = list_trigger_rules_with_status_with_context(&ctx).expect("list");
+        assert_eq!(rows[0].1.run_count, 0);
+        assert!(
+            rows[0].1.next_fire_at.is_some(),
+            "never-fired cron rule must still show a next fire time"
+        );
+
+        // Disable: no next fire.
+        toggle_trigger_rule_with_context(&ctx, &rule.id).expect("toggle");
+        let rows = list_trigger_rules_with_status_with_context(&ctx).expect("list");
+        assert!(
+            rows[0].1.next_fire_at.is_none(),
+            "disabled rule must not claim a next fire time"
+        );
+
+        // Re-enable and change the schedule: the next-fire time must follow
+        // the new expression, not the stored column.
+        toggle_trigger_rule_with_context(&ctx, &rule.id).expect("toggle on");
+        update_trigger_rule_with_context(
+            &ctx,
+            &rule.id,
+            "Fresh Next",
+            "cron",
+            "0 23 * * *",
+            "daily_review",
+            None,
+            None,
+        )
+        .expect("update");
+        let rows = list_trigger_rules_with_status_with_context(&ctx).expect("list");
+        let next = rows[0]
+            .1
+            .next_fire_at
+            .as_deref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok());
+        let next = next.expect("next fire must exist after edit");
+        assert_eq!(
+            next.format("%H:%M").to_string(),
+            "23:00",
+            "next fire must track the edited expression"
+        );
+    }
+
+    #[test]
+    fn test_list_recent_executions_newest_first_with_limit() {
+        let (_tmp, ctx) = setup_context();
+        let rule = create_trigger_rule_with_context(
+            &ctx,
+            "Log Rule",
+            "cron",
+            "0 9 * * *",
+            "daily_review",
+            None,
+            None,
+        )
+        .expect("create rule");
+
+        // Fire across two days: 2026-07-18 and 2026-07-19 (both past 09:00).
+        use crate::orchestration::trigger_executor::fire_due_rules_at;
+        let day1 = chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 7, 18, 9, 30, 0).unwrap();
+        let day2 = chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 7, 19, 9, 30, 0).unwrap();
+        fire_due_rules_at(&ctx, day1).expect("fire day1");
+        fire_due_rules_at(&ctx, day2).expect("fire day2");
+
+        let all = list_recent_trigger_executions_with_context(&ctx, 50).expect("list executions");
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].rule_id, rule.id);
+        assert_eq!(all[0].status, "success");
+        // Newest first: day2's 09:00 > day1's 09:00.
+        assert!(
+            all[0].fired_at > all[1].fired_at,
+            "must be ordered newest-first"
+        );
+
+        let limited = list_recent_trigger_executions_with_context(&ctx, 1).expect("limited");
+        assert_eq!(limited.len(), 1);
+        assert_eq!(limited[0].id, all[0].id, "limit keeps the newest row");
     }
 }

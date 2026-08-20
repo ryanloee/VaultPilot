@@ -8,6 +8,7 @@ import type {
   ConversationSummary,
   ConversationTurn,
   ProviderConnectionResult,
+  TriggerExecution,
   TriggerRule,
 } from "@/types";
 
@@ -321,6 +322,10 @@ export const mockApi = {
       triggerConfig: "0 8 * * *",
       action: "daily_review",
       enabled: true,
+      lastFiredAt: now(),
+      nextFireAt: now(),
+      runCount: 12,
+      lastStatus: "success",
     },
     {
       id: "mock-trigger-2",
@@ -330,8 +335,34 @@ export const mockApi = {
       filter: "tags CONTAINS meeting",
       action: "summarize_and_tag",
       enabled: false,
+      runCount: 0,
     },
   ],
+  listTriggerExecutions: async (limit?: number): Promise<TriggerExecution[]> => {
+    const rows: TriggerExecution[] = [
+      {
+        id: "mock-exec-1",
+        ruleId: "mock-trigger-1",
+        label: "每日早间回顾",
+        action: "daily_review",
+        firedAt: now(),
+        status: "success",
+        error: "",
+        detail: "note_id=mock-note-1",
+      },
+      {
+        id: "mock-exec-2",
+        ruleId: "mock-trigger-1",
+        label: "每日早间回顾",
+        action: "daily_review",
+        firedAt: now(),
+        status: "failed",
+        error: "AI execution failed: no API key configured",
+        detail: "",
+      },
+    ];
+    return typeof limit === "number" ? rows.slice(0, limit) : rows;
+  },
   createTriggerRule: async (
     label: string,
     triggerType: string,
@@ -351,6 +382,24 @@ export const mockApi = {
   }),
   toggleTriggerRule: async (_ruleId: string): Promise<boolean> => true,
   deleteTriggerRule: async (_ruleId: string): Promise<boolean> => true,
+  updateTriggerRule: async (
+    ruleId: string,
+    label: string,
+    triggerType: string,
+    triggerConfig: string,
+    action: string,
+    filter?: string,
+    customPrompt?: string
+  ): Promise<TriggerRule> => ({
+    id: ruleId,
+    label,
+    triggerType: triggerType as "cron" | "event",
+    triggerConfig,
+    filter,
+    action,
+    enabled: true,
+    customPrompt,
+  }),
 } as const;
 
 export function isTauri(): boolean {

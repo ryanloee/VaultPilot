@@ -264,46 +264,47 @@ pub(super) fn parse_or_fallback_note(text: &str, raw_input: &str) -> StructuredN
     heuristic_note_from_input(raw_input)
 }
 
-pub(super) fn parse_or_fallback_answer(
-    text: &str,
-    question: &str,
-    no_context: bool,
-) -> AskResponse {
+/// Parse the model's answer response.
+///
+/// **Strict, no local fallback**: the provider call must have produced real
+/// content — an empty answer (structured or plain) is an error, never
+/// substituted with canned text. A model that "responded" with nothing is a
+/// failed call from the user's perspective (no fabricated answers).
+pub(super) fn parse_model_answer(text: &str) -> Result<AskResponse> {
     if let Ok(json) = extract_json(text) {
         if let Ok(parsed) = serde_json::from_str::<AskResponse>(&json) {
             let answer = parsed.answer.trim().to_string();
-            let answer = if answer.is_empty() {
-                fallback_answer(question, no_context)
-            } else {
-                answer
-            };
+            if answer.is_empty() {
+                return Err(anyhow!(
+                    "model returned an empty answer (structured response had no content)"
+                ));
+            }
             // Even structured answers may carry inline citation markers
             // (#2985) — extract them and footnote the body.
             let (answer, inline_citations) =
                 crate::citations::extract_citations_unresolved(&answer);
             let mut citations = parsed.citations;
             citations.extend(inline_citations);
-            return AskResponse {
+            return Ok(AskResponse {
                 answer,
                 citations,
                 note_draft: parsed.note_draft,
-            };
+            });
         }
     }
 
-    let answer = if text.trim().is_empty() {
-        fallback_answer(question, no_context)
-    } else {
-        text.trim().to_string()
-    };
+    if text.trim().is_empty() {
+        return Err(anyhow!("model returned an empty response (no content)"));
+    }
+    let answer = text.trim().to_string();
     // Pull `[[note#section]]` / `[#cite:path:offset]` markers out of the
     // plain-text answer and rewrite it with `[n]` footnotes (#2985).
     let (answer, citations) = crate::citations::extract_citations_unresolved(&answer);
-    AskResponse {
+    Ok(AskResponse {
         answer,
         citations,
         note_draft: None,
-    }
+    })
 }
 
 /// Extract a programmatic snippet from `body` that contains the best matching
@@ -772,18 +773,6 @@ pub(super) fn fallback_body(body: &str, raw_input: &str) -> String {
     }
 }
 
-pub(super) fn fallback_answer(question: &str, no_context: bool) -> String {
-    if no_context {
-        format!(
-            "我先直接回答这个问题：{}。这次没有检索到可用的本地笔记，所以这是基于通用模型理解给出的回答。",
-            question
-        )
-    } else {
-        "我已经拿到了知识库结果，但这次模型没有按 JSON 返回，所以我先把可读文本直接展示给你。"
-            .to_string()
-    }
-}
-
 pub(super) fn fallback_record_reply(title: &str) -> String {
     format!(
         "我已经理解这条内容，并按“{}”这个主题准备写入知识库。",
@@ -1206,36 +1195,35 @@ mod tests {
         assert_eq!(result.status, "已记录");
     }
 
-    // --- parse_or_fallback_answer ---
+    // --- parse_model_answer (strict: no local fallback) ---
     #[test]
-    fn parse_or_fallback_answer_valid_json() {
+    fn parse_model_answer_valid_json() {
         let text = r#"{"answer":"The answer is 42","citations":[]}"#;
-        let result = parse_or_fallback_answer(text, "what?", false);
+        let result = parse_model_answer(text).expect("valid structured answer");
         assert_eq!(result.answer, "The answer is 42");
     }
 
     #[test]
-    fn parse_or_fallback_answer_empty_answer_uses_fallback() {
+    fn parse_model_answer_empty_structured_answer_is_error() {
+        // Strictness contract: a model that returns no content is a FAILED
+        // call — never substituted with canned local text.
         let text = r#"{"answer":"  ","citations":[]}"#;
-        let result = parse_or_fallback_answer(text, "what?", false);
-        assert!(!result.answer.is_empty());
+        let err = parse_model_answer(text).expect_err("empty answer must fail");
+        assert!(err.to_string().contains("empty answer"), "got: {err}");
     }
 
     #[test]
-    fn parse_or_fallback_answer_no_json_uses_text() {
-        let result = parse_or_fallback_answer("plain text answer", "q", false);
+    fn parse_model_answer_no_json_uses_text() {
+        let result = parse_model_answer("plain text answer").expect("plain text");
         assert_eq!(result.answer, "plain text answer");
     }
 
     #[test]
-    fn parse_or_fallback_answer_extracts_inline_citations() {
+    fn parse_model_answer_extracts_inline_citations() {
         // Plain-text answer carrying a wikilink marker should be footnoted
         // and the citation surfaced (#2985).
-        let result = parse_or_fallback_answer(
-            "Per [[Rust Book#Ownership]] the borrow checker helps.",
-            "q",
-            false,
-        );
+        let result = parse_model_answer("Per [[Rust Book#Ownership]] the borrow checker helps.")
+            .expect("plain text");
         assert_eq!(result.answer, "Per [1] the borrow checker helps.");
         assert_eq!(result.citations.len(), 1);
         assert_eq!(result.citations[0].title, "Rust Book");
@@ -1243,11 +1231,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_or_fallback_answer_json_with_inline_markers() {
+    fn parse_model_answer_json_with_inline_markers() {
         // Structured answers may also carry inline markers alongside explicit
         // citations — both should be present (#2985).
         let text = r#"{"answer":"See [[Notes A]] and explicit","citations":[{"noteId":"x","title":"Explicit","path":"p","snippet":""}]}"#;
-        let result = parse_or_fallback_answer(text, "q", false);
+        let result = parse_model_answer(text).expect("structured answer");
         assert_eq!(result.answer, "See [1] and explicit");
         assert_eq!(result.citations.len(), 2);
         // Explicit citations from the JSON come first, inline markers appended.
@@ -1256,15 +1244,16 @@ mod tests {
     }
 
     #[test]
-    fn parse_or_fallback_answer_empty_text_no_context() {
-        let result = parse_or_fallback_answer("", "what is X?", true);
-        assert!(result.answer.contains("what is X?"));
-    }
-
-    #[test]
-    fn parse_or_fallback_answer_empty_text_with_context() {
-        let result = parse_or_fallback_answer("", "q", false);
-        assert!(result.answer.contains("知识库"));
+    fn parse_model_answer_empty_text_is_error() {
+        // Strictness contract (companion to the structured case above): an
+        // empty provider response must surface as a failure, not as a
+        // fabricated "answer".
+        let err = parse_model_answer("").expect_err("empty response must fail");
+        assert!(err.to_string().contains("empty response"), "got: {err}");
+        assert!(
+            parse_model_answer("   \n  ").is_err(),
+            "whitespace-only too"
+        );
     }
 
     // --- fallback_title ---
@@ -1302,20 +1291,6 @@ mod tests {
     fn fallback_body_empty_uses_heuristic() {
         let result = fallback_body("", "some input");
         assert!(!result.is_empty());
-    }
-
-    // --- fallback_answer ---
-    #[test]
-    fn fallback_answer_no_context() {
-        let result = fallback_answer("what?", true);
-        assert!(result.contains("what?"));
-        assert!(result.contains("通用模型"));
-    }
-
-    #[test]
-    fn fallback_answer_with_context() {
-        let result = fallback_answer("q", false);
-        assert!(result.contains("知识库"));
     }
 
     // --- fallback_record_reply ---

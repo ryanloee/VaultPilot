@@ -1008,6 +1008,98 @@ pub fn vault_export_with_context(
 // Rebuild index
 // ────────────────────────────────────────────────────────
 
+// ────────────────────────────────────────────────────────
+// FTS CJK-bigram migration (schema v2)
+// ────────────────────────────────────────────────────────
+
+/// One-time migration to schema v2: re-tokenize every FTS row with
+/// [`super::search::tokenize_cjk_for_fts`].
+///
+/// Databases created before v2 indexed raw text with unicode61, which folds
+/// contiguous CJK runs into single giant tokens — Chinese term queries could
+/// never match them. This rebuilds `note_fts` (re-reading bodies from disk via
+/// each note's stored path) and the attachment/OCR FTS tables (from the
+/// `attachments` columns), leaving the source tables untouched. Returns the
+/// number of notes re-indexed.
+pub(crate) fn migrate_fts_bigram_with_connection(connection: &mut Connection) -> Result<usize> {
+    let tx = connection.transaction()?;
+    let metas = super::search::list_all_note_metas(&tx)?;
+    let mut migrated = 0usize;
+
+    for meta in &metas {
+        tx.execute("DELETE FROM note_fts WHERE note_id = ?1", [&meta.id])?;
+        // Body is not stored in the notes table — reload from disk. A missing
+        // file leaves the note without FTS rows until the next rebuild, which
+        // `rebuild_index` already handles.
+        if let Ok(doc) = crate::storage::load_note_body_from_meta(meta) {
+            tx.execute(
+                "INSERT INTO note_fts (note_id, title, keywords, body) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    meta.id,
+                    super::search::tokenize_cjk_for_fts(&doc.meta.title),
+                    super::search::tokenize_cjk_for_fts(&doc.meta.keywords.join(" ")),
+                    super::search::tokenize_cjk_for_fts(&doc.body),
+                ],
+            )?;
+            migrated += 1;
+        }
+    }
+
+    // attachment_fts + image_text_fts rebuild from the attachments table.
+    {
+        let mut stmt =
+            tx.prepare("SELECT note_id, id, file_name, stem, path, ocr_text FROM attachments")?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(stmt);
+        for (note_id, attachment_id, file_name, stem, path, ocr_text) in rows {
+            tx.execute(
+                "DELETE FROM attachment_fts WHERE attachment_id = ?1",
+                [&attachment_id],
+            )?;
+            tx.execute(
+                "INSERT INTO attachment_fts (note_id, attachment_id, file_name, stem, path)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    note_id,
+                    attachment_id,
+                    super::search::tokenize_cjk_for_fts(&file_name),
+                    super::search::tokenize_cjk_for_fts(&stem),
+                    super::search::tokenize_cjk_for_fts(&path),
+                ],
+            )?;
+            tx.execute(
+                "DELETE FROM image_text_fts WHERE attachment_id = ?1",
+                [&attachment_id],
+            )?;
+            if !ocr_text.trim().is_empty() {
+                tx.execute(
+                    "INSERT INTO image_text_fts (note_id, attachment_id, ocr_text)
+                     VALUES (?1, ?2, ?3)",
+                    params![
+                        note_id,
+                        attachment_id,
+                        &super::search::tokenize_cjk_for_fts(&ocr_text)
+                    ],
+                )?;
+            }
+        }
+    }
+
+    tx.commit()?;
+    Ok(migrated)
+}
+
 #[instrument(skip(context))]
 pub fn rebuild_index_with_context(context: &StorageContext) -> Result<super::IndexStats> {
     let (mut connection, settings) = open_connection(context)?;
@@ -1867,7 +1959,10 @@ pub fn set_attachment_ocr_text(
         connection.execute(
             "INSERT INTO image_text_fts (note_id, attachment_id, ocr_text)
              SELECT note_id, id, ?1 FROM attachments WHERE path = ?2",
-            params![trimmed, attachment_path],
+            params![
+                &super::search::tokenize_cjk_for_fts(trimmed),
+                attachment_path
+            ],
         )?;
     }
     Ok(())
@@ -2561,13 +2656,16 @@ fn index_note_file_with_connection(
             "DELETE FROM note_fts WHERE note_id = ?1",
             [document.meta.id.clone()],
         )?;
+        // CJK bigram pre-tokenization: unicode61 alone indexes contiguous
+        // Chinese as one giant token, making term queries silently miss
+        // (see tokenize_cjk_for_fts).
         connection.execute(
             "INSERT INTO note_fts (note_id, title, keywords, body) VALUES (?1, ?2, ?3, ?4)",
             params![
                 document.meta.id,
-                document.meta.title,
-                document.meta.keywords.join(" "),
-                document.body
+                super::search::tokenize_cjk_for_fts(&document.meta.title),
+                super::search::tokenize_cjk_for_fts(&document.meta.keywords.join(" ")),
+                super::search::tokenize_cjk_for_fts(&document.body),
             ],
         )?;
         sync_note_attachments_with_connection(
@@ -2718,15 +2816,19 @@ fn sync_note_attachments_with_connection(
             params![
                 note_id,
                 attachment_id,
-                absolute
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or_default(),
-                absolute
-                    .file_stem()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or_default(),
-                absolute.to_string_lossy().to_string()
+                super::search::tokenize_cjk_for_fts(
+                    absolute
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or_default()
+                ),
+                super::search::tokenize_cjk_for_fts(
+                    absolute
+                        .file_stem()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or_default()
+                ),
+                super::search::tokenize_cjk_for_fts(&absolute.to_string_lossy())
             ],
         )?;
         // #3541: Index OCR text into dedicated FTS table for efficient
@@ -2735,7 +2837,11 @@ fn sync_note_attachments_with_connection(
             connection.execute(
                 "INSERT INTO image_text_fts (note_id, attachment_id, ocr_text)
                  VALUES (?1, ?2, ?3)",
-                params![note_id, attachment_id, &ocr_text],
+                params![
+                    note_id,
+                    attachment_id,
+                    &super::search::tokenize_cjk_for_fts(&ocr_text)
+                ],
             )?;
         }
     }

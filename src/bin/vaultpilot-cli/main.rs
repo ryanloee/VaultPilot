@@ -8110,11 +8110,18 @@ fn handle_trigger(context: &StorageContext, action: &TriggerActions) -> Result<V
             }))
         }
         TriggerActions::FireNow => {
-            // One synchronous tick: evaluate enabled cron rules against the
-            // current clock and record an execution for each due rule (#3048).
-            let outcome = vaultpilot_lib::orchestration::trigger_executor::fire_due_rules_at(
-                context,
-                chrono::Utc::now(),
+            // One dispatching tick: evaluate enabled cron rules against the
+            // current clock and actually execute each due rule's action
+            // (grounded AI call + result note + execution log row) — the same
+            // path the background executor runs (#3048).
+            //
+            // `handle_trigger` is always invoked inside `block_in_place`, so
+            // blocking on the runtime handle here is safe.
+            let outcome = tokio::runtime::Handle::current().block_on(
+                vaultpilot_lib::orchestration::trigger_executor::fire_due_rules_with_dispatch(
+                    context,
+                    chrono::Utc::now(),
+                ),
             )?;
             // #3055: `"fired"` must reflect whether any rule actually fired,
             // not just whether the tick ran. The previous `true` hardcode

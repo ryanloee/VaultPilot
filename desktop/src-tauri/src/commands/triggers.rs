@@ -3,9 +3,9 @@
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use vaultpilot_lib::storage::{
-    create_trigger_rule_with_context, delete_trigger_rule_with_context,
-    initialize_storage_async, list_trigger_rules_with_context,
-    toggle_trigger_rule_with_context,
+    create_trigger_rule_with_context, delete_trigger_rule_with_context, initialize_storage_async,
+    list_recent_trigger_executions_with_context, list_trigger_rules_with_status_with_context,
+    toggle_trigger_rule_with_context, update_trigger_rule_with_context,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -18,10 +18,39 @@ pub struct TriggerRuleDto {
     pub action: String,
     pub enabled: bool,
     pub custom_prompt: Option<String>,
+    /// Scheduler status so the UI can answer "did it fire, and did it work?".
+    #[serde(default)]
+    pub last_fired_at: Option<String>,
+    #[serde(default)]
+    pub next_fire_at: Option<String>,
+    #[serde(default)]
+    pub run_count: i64,
+    #[serde(default)]
+    pub last_status: Option<String>,
+    #[serde(default)]
+    pub last_error: Option<String>,
 }
 
 impl From<vaultpilot_lib::orchestration::trigger::AgentTriggerRule> for TriggerRuleDto {
     fn from(r: vaultpilot_lib::orchestration::trigger::AgentTriggerRule) -> Self {
+        Self::with_status(
+            r,
+            vaultpilot_lib::storage::TriggerRuleStatus {
+                last_fired_at: None,
+                next_fire_at: None,
+                run_count: 0,
+                last_status: None,
+                last_error: None,
+            },
+        )
+    }
+}
+
+impl TriggerRuleDto {
+    fn with_status(
+        r: vaultpilot_lib::orchestration::trigger::AgentTriggerRule,
+        s: vaultpilot_lib::storage::TriggerRuleStatus,
+    ) -> Self {
         let (trigger_type, trigger_config, filter) = match &r.trigger {
             vaultpilot_lib::orchestration::trigger::TriggerKind::Cron { expression } => {
                 ("cron".to_string(), expression.clone(), None)
@@ -39,17 +68,78 @@ impl From<vaultpilot_lib::orchestration::trigger::AgentTriggerRule> for TriggerR
             action: format!("{:?}", r.action).to_lowercase(),
             enabled: r.enabled,
             custom_prompt: r.custom_prompt,
+            last_fired_at: s.last_fired_at,
+            next_fire_at: s.next_fire_at,
+            run_count: s.run_count,
+            last_status: s.last_status,
+            last_error: s.last_error,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct TriggerExecutionDto {
+    pub id: String,
+    pub rule_id: String,
+    pub label: String,
+    pub action: String,
+    pub fired_at: String,
+    pub status: String,
+    pub error: String,
+    pub detail: String,
+}
+
+impl From<vaultpilot_lib::storage::TriggerExecutionRecord> for TriggerExecutionDto {
+    fn from(r: vaultpilot_lib::storage::TriggerExecutionRecord) -> Self {
+        Self {
+            id: r.id,
+            rule_id: r.rule_id,
+            label: r.label,
+            action: r.action,
+            fired_at: r.fired_at,
+            status: r.status,
+            error: r.error,
+            detail: r.detail,
         }
     }
 }
 
 #[tauri::command]
-pub async fn list_trigger_rules(state: tauri::State<'_, AppState>) -> Result<Vec<TriggerRuleDto>, String> {
+pub async fn list_trigger_rules(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<TriggerRuleDto>, String> {
     let ctx = state.storage.clone();
-    initialize_storage_async(&ctx).await.map_err(|e| e.to_string())?;
+    initialize_storage_async(&ctx)
+        .await
+        .map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
-        list_trigger_rules_with_context(&ctx)
-            .map(|rules| rules.into_iter().map(TriggerRuleDto::from).collect())
+        list_trigger_rules_with_status_with_context(&ctx)
+            .map(|pairs| {
+                pairs
+                    .into_iter()
+                    .map(|(r, s)| TriggerRuleDto::with_status(r, s))
+                    .collect()
+            })
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Recent trigger-rule fires (newest first) — the user-facing execution log
+/// that answers "did my scheduled task actually run?".
+#[tauri::command]
+pub async fn list_trigger_executions(
+    state: tauri::State<'_, AppState>,
+    limit: Option<u32>,
+) -> Result<Vec<TriggerExecutionDto>, String> {
+    let ctx = state.storage.clone();
+    initialize_storage_async(&ctx)
+        .await
+        .map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || {
+        list_recent_trigger_executions_with_context(&ctx, limit.unwrap_or(20))
+            .map(|rows| rows.into_iter().map(TriggerExecutionDto::from).collect())
             .map_err(|e| e.to_string())
     })
     .await
@@ -67,7 +157,9 @@ pub async fn create_trigger_rule(
     custom_prompt: Option<String>,
 ) -> Result<TriggerRuleDto, String> {
     let ctx = state.storage.clone();
-    initialize_storage_async(&ctx).await.map_err(|e| e.to_string())?;
+    initialize_storage_async(&ctx)
+        .await
+        .map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
         create_trigger_rule_with_context(
             &ctx,
@@ -86,12 +178,49 @@ pub async fn create_trigger_rule(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn update_trigger_rule(
+    state: tauri::State<'_, AppState>,
+    rule_id: String,
+    label: String,
+    trigger_type: String,
+    trigger_config: String,
+    action: String,
+    filter: Option<String>,
+    custom_prompt: Option<String>,
+) -> Result<TriggerRuleDto, String> {
+    let ctx = state.storage.clone();
+    initialize_storage_async(&ctx)
+        .await
+        .map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || {
+        update_trigger_rule_with_context(
+            &ctx,
+            &rule_id,
+            &label,
+            &trigger_type,
+            &trigger_config,
+            &action,
+            filter.as_deref(),
+            custom_prompt.as_deref(),
+        )
+        .map_err(|e| e.to_string())?
+        .map(TriggerRuleDto::from)
+        .ok_or_else(|| format!("rule not found: {rule_id}"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn toggle_trigger_rule(
     state: tauri::State<'_, AppState>,
     rule_id: String,
 ) -> Result<bool, String> {
     let ctx = state.storage.clone();
-    initialize_storage_async(&ctx).await.map_err(|e| e.to_string())?;
+    initialize_storage_async(&ctx)
+        .await
+        .map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
         toggle_trigger_rule_with_context(&ctx, &rule_id)
             .map_err(|e| e.to_string())?
@@ -107,7 +236,9 @@ pub async fn delete_trigger_rule(
     rule_id: String,
 ) -> Result<bool, String> {
     let ctx = state.storage.clone();
-    initialize_storage_async(&ctx).await.map_err(|e| e.to_string())?;
+    initialize_storage_async(&ctx)
+        .await
+        .map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
         delete_trigger_rule_with_context(&ctx, &rule_id).map_err(|e| e.to_string())
     })

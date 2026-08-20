@@ -563,7 +563,10 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
     // targets without OpenSSL, e.g. Android, still initialize cleanly).
     #[cfg(feature = "email")]
     connection.execute_batch(crate::mail::MAIL_SCHEMA_DDL)?;
-    connection.execute_batch("PRAGMA user_version = 1;")?;
+    // v2: FTS indexes use CJK bigram pre-tokenization (see
+    // search::tokenize_cjk_for_fts and the v1→v2 migration in
+    // initialize_storage_with_context).
+    connection.execute_batch("PRAGMA user_version = 2;")?;
     Ok(())
 }
 
@@ -775,7 +778,9 @@ mod tests {
         let version: i32 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 1);
+        // v2: CJK bigram FTS tokenization (see the v1→v2 migration in
+        // initialize_storage_with_context).
+        assert_eq!(version, 2);
     }
 
     #[test]

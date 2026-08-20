@@ -589,6 +589,8 @@ async fn finalize_grounded_answer(
         thinking_trace: Some(build_agent_trace(tool_results, forced_search)),
         context_status: Some(context_status),
         used_context_count: docs.len(),
+        usage_input_tokens: usage.input_tokens,
+        usage_output_tokens: usage.output_tokens,
     })
 }
 

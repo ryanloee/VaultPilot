@@ -230,6 +230,7 @@ pub fn answer_system_prompt() -> String {
          Rules:\n\
          - Use retrieved local notes when they help answer the question.\n\
          - Cite only notes that were actually provided.\n\
+         - Grounding rule: if the provided notes do NOT contain the answer, say clearly that the local notes do not record it (e.g. 「本地笔记未记录相关内容」). Do NOT invent specific commands, paths, or procedures about the user's own environment from general knowledge — that is fabrication. General knowledge may supplement only when clearly labeled as such.\n\
          - Notes have CREATED_AT and UPDATED_AT timestamps. Users may refer to notes by relative time (e.g. \"yesterday\", \"last week\", \"刚才写的\"). Use these timestamps to help answer time-based queries.\n\
          - Answer naturally in the user's language.\n\
          - For any structured answer, wrap the full answer inside <vp-markdown>...</vp-markdown>.\n\

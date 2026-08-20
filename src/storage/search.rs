@@ -1742,31 +1742,87 @@ pub(super) fn normalize_search_text(text: &str) -> String {
         .collect::<String>()
 }
 
+/// CJK-aware FTS5 pre-tokenizer for the **index side**.
+///
+/// SQLite's unicode61 tokenizer treats a run of contiguous CJK characters as
+/// a single token, so a Chinese body like "刷内核的步骤" is indexed as ONE
+/// token and a `MATCH '内核'` query can never hit it — this was the root
+/// cause of Chinese queries silently missing notes the vault definitely
+/// contained. We expand every CJK run of 2+ chars into space-separated
+/// bigrams ("刷内 内核 核的 的步 步骤"); single-char runs and non-CJK text
+/// pass through unchanged. The query side emits the same bigrams via
+/// [`extract_search_terms`], so both ends line up.
+pub(super) fn tokenize_cjk_for_fts(text: &str) -> String {
+    fn flush_run(run: &[char], out: &mut String) {
+        if run.is_empty() {
+            return;
+        }
+        if run.len() >= 2 {
+            for pair in run.windows(2) {
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                out.push(pair[0]);
+                out.push(pair[1]);
+            }
+        } else {
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.push(run[0]);
+        }
+    }
+
+    let mut out = String::with_capacity(text.len() + text.len() / 4);
+    let mut run: Vec<char> = Vec::new();
+    for ch in text.chars() {
+        if is_cjk(ch) {
+            run.push(ch);
+        } else {
+            flush_run(&run, &mut out);
+            run.clear();
+            out.push(ch);
+        }
+    }
+    flush_run(&run, &mut out);
+    out
+}
+
 pub(super) fn normalize_query_for_search(text: &str) -> String {
     let mut normalized = normalize_search_text(text);
-    for noise in [
+    // Longest-first so prefix-overlapping entries ("一下子" vs "一下",
+    // "是什么样" vs "是什么") don't partially consume each other. NB: a
+    // "怎么刷" entry was removed — it swallowed the real verb in queries
+    // like "怎么刷机", degrading the whole query to "内核 机".
+    const NOISE_TERMS: &[&str] = &[
+        // 4 chars
+        "是什么样",
+        // 3 chars
         "告诉我",
+        "一下子",
+        "是什么",
+        "有没有",
+        "怎么做",
+        "怎么办",
+        "一下呢",
+        "一下啊",
+        "一下呀",
+        "资料库",
+        // 2 chars
         "帮我",
         "请问",
         "麻烦",
         "一下",
-        "一下子",
         "这个",
         "那个",
-        "怎么做",
-        "怎么办",
-        "怎么刷",
         "怎么",
         "如何",
-        "是什么",
-        "是什么样",
-        "有没有",
         "之前",
         "以前",
-        "一下呢",
-        "一下啊",
-        "一下呀",
-    ] {
+        "还有",
+        "告诉",
+    ];
+    for noise in NOISE_TERMS {
         normalized = normalized.replace(noise, " ");
     }
     normalized.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -2031,9 +2087,14 @@ fn make_fts_query(text: &str) -> String {
         .into_iter()
         .map(|term| escape_fts5_term(&term))
         .filter(|term| !term.is_empty())
-        .take(8)
+        .take(12)
         .collect();
-    terms.join(" ")
+    // OR (not FTS5's implicit AND): one missing term must not zero out the
+    // whole match — the pipeline re-ranks candidates with bm25 ordering plus
+    // the in-memory `document_relevance_score`, so recall-first here is the
+    // right trade-off. NB: `count_fts_matches` shares this query, so its
+    // total counts "matched any term".
+    terms.join(" OR ")
 }
 
 #[cfg(test)]
@@ -2256,13 +2317,169 @@ mod tests {
     fn make_fts_query_does_not_produce_fts5_operators() {
         // A query like "test -not" should not produce a bare minus sign
         let query = make_fts_query("test -not");
-        // All terms should be quoted, no bare operators
+        // All terms should be quoted; the only bare token allowed is the OR
+        // separator inserted by make_fts_query itself.
         for part in query.split_whitespace() {
+            if part == "OR" {
+                continue;
+            }
             assert!(
                 part.starts_with('"') && part.ends_with('"'),
                 "each term should be quoted: {part}"
             );
         }
+    }
+
+    #[test]
+    fn make_fts_query_or_joins_terms_for_recall() {
+        // Implicit AND let one absent term zero out the whole FTS match;
+        // terms are now OR-joined (bm25 + re-ranking refine precision).
+        let query = make_fts_query("kernel flashing");
+        assert!(
+            query.contains(" OR "),
+            "terms must be OR-joined, got: {query}"
+        );
+    }
+
+    #[test]
+    fn tokenize_cjk_for_fts_expands_runs_into_bigrams() {
+        // Contiguous CJK becomes space-separated bigrams; latin untouched.
+        assert_eq!(tokenize_cjk_for_fts("刷内核"), "刷内 内核");
+        assert_eq!(tokenize_cjk_for_fts("内核"), "内核");
+        // Single CJK char passes through.
+        assert_eq!(tokenize_cjk_for_fts("刷 kernel"), "刷 kernel");
+        // Mixed: each CJK run expanded independently, non-CJK verbatim.
+        assert_eq!(
+            tokenize_cjk_for_fts("刷内核步骤: fastboot flash"),
+            "刷内 内核 核步 步骤: fastboot flash"
+        );
+        // CJK-range punctuation (U+3000..U+303F) counts as CJK and stays
+        // inside the run — query-side n-grams treat it the same way, so
+        // both ends stay consistent.
+        assert_eq!(tokenize_cjk_for_fts("内核、启动"), "内核 核、 、启 启动");
+    }
+
+    #[test]
+    fn normalize_query_keeps_verb_after_interrogative() {
+        // "怎么刷机" must degrade to "刷机" — the old noise entry "怎么刷"
+        // swallowed the verb and reduced the query to "内核 机".
+        let normalized = normalize_query_for_search("内核怎么刷机");
+        assert!(normalized.contains("内核"), "got: {normalized}");
+        assert!(normalized.contains("刷机"), "got: {normalized}");
+    }
+
+    #[test]
+    fn normalize_query_longest_noise_first() {
+        // "一下子" must be removed as a whole (the old short-first order let
+        // "一下" consume its prefix, leaving a stray "子").
+        assert_eq!(normalize_query_for_search("帮我一下子"), "");
+    }
+
+    /// End-to-end CJK retrieval: a note that records kernel-flashing must be
+    /// found by the natural-language question "内核怎么刷机". This is the
+    /// exact regression behind "笔记里有记录但 AI 搜不到就开始编".
+    #[test]
+    fn cjk_query_finds_note_with_kernel_flashing_body() {
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+
+        save_note_with_context(
+            &ctx,
+            NoteDocument {
+                meta: NoteMeta {
+                    title: "刷机记录".to_string(),
+                    ..Default::default()
+                },
+                body: "板子刷内核的命令：fastboot flash boot boot.img\nwboot -w update zboot.img"
+                    .to_string(),
+                search_snippet: None,
+                search_score: None,
+            },
+        )
+        .expect("save");
+
+        let results = search_notes_with_context(
+            &ctx,
+            SearchQuery {
+                text: "内核怎么刷机".to_string(),
+                limit: Some(10),
+                ..Default::default()
+            },
+        )
+        .expect("search");
+        assert!(
+            results.notes.iter().any(|n| n.title == "刷机记录"),
+            "CJK question must retrieve the kernel-flashing note, got: {:?}",
+            results
+                .notes
+                .iter()
+                .map(|n| n.title.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// v1 → v2 migration: an index written by the old (unicode61-only) code
+    /// cannot match CJK term queries; after the bigram migration it can.
+    #[test]
+    fn fts_bigram_migration_makes_v1_index_searchable() {
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+
+        let doc = save_note_with_context(
+            &ctx,
+            NoteDocument {
+                meta: NoteMeta {
+                    title: "刷机记录".to_string(),
+                    ..Default::default()
+                },
+                body: "板子刷内核的命令：fastboot flash boot boot.img".to_string(),
+                search_snippet: None,
+                search_score: None,
+            },
+        )
+        .expect("save");
+
+        // Simulate a v1 index: overwrite note_fts with raw (untokenized) text.
+        {
+            let (conn, _) = open_connection(&ctx).expect("conn");
+            conn.execute("DELETE FROM note_fts WHERE note_id = ?1", [&doc.meta.id])
+                .expect("clear fts");
+            conn.execute(
+                "INSERT INTO note_fts (note_id, title, keywords, body) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    doc.meta.id,
+                    "刷机记录",
+                    "",
+                    "板子刷内核的命令：fastboot boot boot.img"
+                ],
+            )
+            .expect("insert raw v1 row");
+            let hits: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM note_fts WHERE note_fts MATCH ?1",
+                    params![make_fts_query("内核怎么刷机")],
+                    |row| row.get(0),
+                )
+                .expect("count");
+            assert_eq!(
+                hits, 0,
+                "unicode61-folded CJK runs must not match term queries"
+            );
+        }
+
+        // Run the v1→v2 migration and verify the note becomes searchable.
+        let (mut conn, _) = open_connection(&ctx).expect("conn");
+        let migrated =
+            super::super::notes::migrate_fts_bigram_with_connection(&mut conn).expect("migrate");
+        assert!(migrated >= 1, "at least one note must be re-indexed");
+        let hits: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM note_fts WHERE note_fts MATCH ?1",
+                params![make_fts_query("内核怎么刷机")],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert!(hits >= 1, "bigram-indexed CJK must match after migration");
     }
     #[test]
     fn semantic_vectors_rank_related_text_higher() {

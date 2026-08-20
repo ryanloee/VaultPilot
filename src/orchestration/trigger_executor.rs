@@ -6,30 +6,35 @@
 //!
 //! - **Pure cron evaluation** ([`last_due_time_before`], [`is_rule_due`],
 //!   [`evaluate_rules_at`]) — fully unit-testable, no I/O.
-//! - **Fire-and-record** ([`fire_due_rules`]) — a synchronous step that, given
-//!   a [`StorageContext`], loads enabled cron rules, finds the ones whose
-//!   schedule is due relative to their `last_fired_at`, records an execution
-//!   row in `trigger_executions`, and updates the rule's `last_fired_at` /
-//!   `run_count` / `last_status`. The observable side effect is real: callers
-//!   can query the execution log and the rule's last-fired timestamp.
+//! - **Fire-and-record** ([`fire_due_rules_at`]) — a synchronous step that,
+//!   given a [`StorageContext`], loads enabled cron rules, finds the ones
+//!   whose schedule is due relative to their `last_fired_at`, records an
+//!   execution row in `trigger_executions`, and updates the rule's
+//!   `last_fired_at` / `run_count` / `last_status`. The observable side
+//!   effect is real: callers can query the execution log and the rule's
+//!   last-fired timestamp.
+//! - **Dispatching tick** ([`fire_due_rules_with_dispatch`]) — the full path
+//!   used by the background executor and `trigger fire-now`: in addition to
+//!   the schedule evaluation above, each due rule's action is actually
+//!   executed — the action prompt runs through the grounded AI pipeline
+//!   ([`ask_with_ai_with_context`](crate::ask_with_ai_with_context)), the
+//!   answer is saved as a vault note, and the outcome (success with note id /
+//!   failed with error) is recorded in the execution log.
 //! - **Background loop** ([`TriggerExecutor::spawn`]) — a `tokio` task that
-//!   calls [`fire_due_rules`] on a fixed cadence until the
+//!   runs [`fire_due_rules_with_dispatch`] on a fixed cadence until the
 //!   [`CancellationToken`](tokio_util::sync::CancellationToken) is cancelled.
 //!
-//! ## Dispatch model (honest scope)
+//! ## Dispatch model
 //!
-//! Firing a rule in this module means: **evaluate schedule → record execution
-//! → emit a `tracing` event**. It does **not** yet invoke the LLM agent to
-//! produce a daily-review / summarize-and-tag note. The agent dispatch path
-//! requires the full runtime (provider client, vault write-back, prompt
-//! templating) and is intentionally deferred to a follow-up; a pure cron
-//! evaluator + observable fire log is the minimum honest fix for the silent
-//! failure mode reported in #3048 ("rules sit in the DB and nothing happens").
+//! Firing a rule means: **evaluate schedule → check conditions → execute the
+//! action via the AI pipeline → save the result as a note → record the
+//! outcome**. Every fired rule is observable in three places: the
+//! `trigger_executions` log, the generated vault note, and the rule's
+//! `last_fired_at` / `run_count` / `last_status` columns.
 //!
-//! Rules now produce *visible* output the moment they fire — query
-//! `trigger_executions` or check `trigger_rules.last_fired_at` — so users and
-//! the inspector can verify the scheduler is alive. A future change plugs an
-//! `AgentDispatcher` into the fire path.
+//! [`fire_due_rules_at`] (record-only, no AI call) is retained as the
+//! schedule-evaluation primitive — it is what tests use to assert due-ness
+//! bookkeeping without a provider.
 
 use std::str::FromStr;
 use std::time::Duration;
@@ -44,10 +49,13 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::orchestration::trigger::{AgentTriggerRule, ConditionContext, TriggerKind};
+use crate::models::{NoteDocument, NoteMeta};
+use crate::orchestration::trigger::{
+    AgentTriggerRule, ConditionContext, TriggerAction, TriggerKind,
+};
 use crate::storage::pool::open_connection;
 use crate::storage::trigger_rules::list_trigger_rules_with_context;
-use crate::storage::StorageContext;
+use crate::storage::{save_note_with_context, StorageContext};
 
 /// Default cadence at which the background executor scans for due rules.
 ///
@@ -55,6 +63,13 @@ use crate::storage::StorageContext;
 /// field) — polling faster would not surface any earlier fires and would add
 /// pointless DB load.
 pub const DEFAULT_TICK_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Per-rule timeout for the AI dispatch step of
+/// [`fire_due_rules_with_dispatch`]. Matches the subscription AI timeout
+/// documented in `orchestration/scheduled_research.rs` — long enough for a
+/// grounded multi-source answer, short enough that one stuck provider call
+/// cannot stall a tick indefinitely.
+const DISPATCH_AI_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Normalize a user-supplied cron expression to the 6-field form expected by
 /// the `cron` crate (`sec min hour dom mon dow`).
@@ -475,6 +490,311 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+// ────────────────────────────────────────────────────────
+// Action dispatch — turning a fired rule into real work
+// ────────────────────────────────────────────────────────
+
+/// A due rule lifted to owned form so it can cross the await points of the
+/// dispatch step ([`DueRule`] borrows its rule and cannot).
+struct OwnedDueRule {
+    rule: AgentTriggerRule,
+    due_at: DateTime<Utc>,
+}
+
+/// Build the prompt executed for `rule`'s action.
+///
+/// `Ok(prompt)` — run it through the grounded AI pipeline.
+/// `Err(reason)` — the action cannot run from a cron context (misconfigured
+/// rule); the fire is recorded as `"failed"` with `reason` as the error.
+fn build_action_prompt(rule: &AgentTriggerRule, now: DateTime<Utc>) -> Result<String, String> {
+    let date = now.format("%Y-%m-%d").to_string();
+    match rule.action {
+        TriggerAction::DailyReview => Ok(format!(
+            r#"[Scheduled Task: Daily Review]
+You are running the scheduled "Daily Review" trigger for this vault.
+Review the notes created or updated recently (roughly the last 24 hours) and produce:
+- A concise summary of what was worked on and decided
+- Open threads, TODOs and follow-ups worth tracking
+- Notes that look related to each other (candidate cross-links)
+
+Today's date: {date}"#
+        )),
+        TriggerAction::SummarizeAndTag => Ok(format!(
+            r#"[Scheduled Task: Summarize & Tag]
+You are running the scheduled "Summarize & Tag" trigger for this vault.
+Look at recently created or modified notes and for each one:
+- Summarize it in one or two sentences
+- Propose a concise set of tags (existing vault tags preferred)
+
+Today's date: {date}"#
+        )),
+        TriggerAction::SuggestLinks => Ok(format!(
+            r#"[Scheduled Task: Suggest Links]
+You are running the scheduled "Suggest Links" trigger for this vault.
+Find notes that cover related topics and suggest concrete [[wikilinks]] that
+should be added between them, with a one-line reason per suggestion.
+
+Today's date: {date}"#
+        )),
+        TriggerAction::ProcessWebhook => Err(
+            "process_webhook action requires an event/webhook payload and cannot run \
+             from a cron schedule"
+                .to_string(),
+        ),
+        TriggerAction::Custom => rule
+            .effective_prompt()
+            .map(|p| format!("[Scheduled Task]\n{p}"))
+            .ok_or_else(|| {
+                "custom trigger rule has no prompt configured (#2842) — set a prompt \
+                 or pick another action"
+                    .to_string()
+            }),
+    }
+}
+
+/// Outcome of dispatching one rule's action. `status` is `"success"` or
+/// `"failed"` — the same contract as the `trigger_executions.status` column
+/// (#3055).
+struct ActionDispatch {
+    status: &'static str,
+    error: String,
+    detail: String,
+}
+
+impl ActionDispatch {
+    fn failed(error: String) -> Self {
+        Self {
+            status: "failed",
+            error,
+            detail: String::new(),
+        }
+    }
+}
+
+/// Execute `rule`'s action: run the action prompt through the grounded AI
+/// pipeline (with vault search context) and save the answer as a vault note.
+///
+/// This is the "agent dispatch" half of a fire. It never panics and never
+/// returns `Err` — every failure mode (misconfigured action, AI error,
+/// timeout, note-save failure) is reported as an `ActionDispatch` with
+/// `status = "failed"` so the caller records it in the execution log instead
+/// of losing it.
+async fn dispatch_rule_action(
+    context: &StorageContext,
+    rule: &AgentTriggerRule,
+    now: DateTime<Utc>,
+) -> ActionDispatch {
+    let prompt = match build_action_prompt(rule, now) {
+        Ok(p) => p,
+        Err(reason) => {
+            return ActionDispatch {
+                status: "failed",
+                detail: format!("action={:?}", rule.action),
+                error: reason,
+            };
+        }
+    };
+
+    let answered = match tokio::time::timeout(
+        DISPATCH_AI_TIMEOUT,
+        crate::ask_with_ai_with_context(
+            context,
+            prompt.clone(),
+            None,      // no conversation history
+            None,      // no images
+            None,      // no model override
+            |_, _| {}, // suppress progress events
+        ),
+    )
+    .await
+    {
+        Ok(Ok(answer)) => answer,
+        Ok(Err(e)) => return ActionDispatch::failed(format!("AI execution failed: {e:#}")),
+        Err(_) => {
+            return ActionDispatch::failed(format!(
+                "AI execution timed out after {}s",
+                DISPATCH_AI_TIMEOUT.as_secs()
+            ))
+        }
+    };
+    // Token usage as reported by the provider — recorded in the execution
+    // log so quota consumption is attributable per fire.
+    let tokens_in = answered.usage_input_tokens;
+    let tokens_out = answered.usage_output_tokens;
+    let answer = answered.answer;
+
+    let action_str = format!("{:?}", rule.action).to_lowercase();
+    // Local wall-clock in the title — the executor's clock is UTC, which
+    // would label a 10:47 (UTC+8) fire as "02:47" and confuse the user.
+    let local_now = now.with_timezone(&chrono::Local);
+    let title = format!(
+        "[Trigger] {} — {}",
+        rule.label,
+        local_now.format("%Y-%m-%d %H:%M")
+    );
+    let meta = NoteMeta {
+        title: title.clone(),
+        summary: answer.chars().take(300).collect(),
+        source: "trigger_rule".to_string(),
+        tags: vec!["trigger".to_string(), action_str.clone()],
+        ..Default::default()
+    };
+    let body = format!(
+        "# {}\n\n{}\n\n---\n*Generated by trigger rule '{}' ({}) — {}*\n*Prompt: {}*",
+        title,
+        answer,
+        rule.label,
+        action_str,
+        local_now.to_rfc3339(),
+        truncate(&prompt, 200)
+    );
+    let note = NoteDocument {
+        meta,
+        body,
+        search_snippet: None,
+        search_score: None,
+    };
+
+    let ctx = context.clone();
+    match spawn_blocking(move || save_note_with_context(&ctx, note)).await {
+        Ok(Ok(saved)) => {
+            // Include token usage so "did this consume provider quota?" is
+            // answerable straight from the execution log.
+            let mut detail = format!("note_id={}", saved.meta.id);
+            if let Some(tokens_in) = tokens_in {
+                detail.push_str(&format!(" tokens_in={tokens_in}"));
+            }
+            if let Some(tokens_out) = tokens_out {
+                detail.push_str(&format!(" tokens_out={tokens_out}"));
+            }
+            ActionDispatch {
+                status: "success",
+                error: String::new(),
+                detail,
+            }
+        }
+        Ok(Err(e)) => ActionDispatch::failed(format!("failed to save result note: {e}")),
+        Err(e) => ActionDispatch::failed(format!("save task join error: {e}")),
+    }
+}
+
+/// One dispatching tick of the executor: evaluate due rules against `now`,
+/// then for each due rule execute its action (AI + note write-back) and
+/// record the outcome in the execution log.
+///
+/// This is what the background loop ([`TriggerExecutor::spawn`]) and the CLI
+/// `trigger fire-now` command run. It layers on top of the same evaluation
+/// primitives as [`fire_due_rules_at`] but replaces the record-only fire with
+/// a real dispatch, so a "success" row means the action actually ran and its
+/// result note exists (`detail` carries the note id).
+///
+/// Dispatch failures are recorded as `"failed"` executions (and still advance
+/// `last_fired_at`) — a rule whose AI call fails must not re-fire on every
+/// tick for the same due time.
+pub async fn fire_due_rules_with_dispatch(
+    context: &StorageContext,
+    now: DateTime<Utc>,
+) -> Result<FireStepOutcome> {
+    // Step 1 (blocking): load + evaluate which rules are schedule-due.
+    let ctx = context.clone();
+    let (evaluated, due) = spawn_blocking(move || -> Result<(usize, Vec<OwnedDueRule>)> {
+        let pairs = load_enabled_cron_rules_with_last_fired(&ctx)?;
+        let inputs: Vec<RuleDueInput> = pairs
+            .iter()
+            .map(|(rule, last)| RuleDueInput {
+                rule,
+                last_fired_at: *last,
+            })
+            .collect();
+        let evaluated = inputs.len();
+        let due = evaluate_rules_at(&inputs, now)
+            .into_iter()
+            .map(|d| OwnedDueRule {
+                rule: d.rule.clone(),
+                due_at: d.due_at,
+            })
+            .collect();
+        Ok((evaluated, due))
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("tick evaluate task panicked: {e}"))??;
+
+    let mut outcome = FireStepOutcome {
+        evaluated,
+        ..Default::default()
+    };
+
+    // Step 2 (async): dispatch each due rule, then record the outcome.
+    for d in due {
+        // Same #3439 condition gate as the record-only path: cron triggers
+        // have no event context, so context-dependent conditions cannot be
+        // satisfied and the fire is skipped (without a DB row).
+        if !d.rule.conditions_met(&ConditionContext::default()) {
+            outcome.skipped += 1;
+            warn!(
+                rule_id = %d.rule.id,
+                label = %d.rule.label,
+                due_at = %d.due_at.to_rfc3339(),
+                "cron rule is due but conditions not met (evaluated against \
+                 empty context — TagContains/FrontmatterEquals conditions \
+                 cannot be satisfied for cron triggers); skipping fire"
+            );
+            continue;
+        }
+
+        let dispatch = dispatch_rule_action(context, &d.rule, now).await;
+        let status = dispatch.status;
+        let error = dispatch.error;
+        // Detail convention mirrors the record-only path: the note id on
+        // success, otherwise the effective prompt / action for context.
+        let detail = if dispatch.detail.is_empty() {
+            d.rule
+                .effective_prompt()
+                .map(|p| format!("effective_prompt={}", truncate(p, 200)))
+                .unwrap_or_else(|| format!("action={:?}", d.rule.action))
+        } else {
+            dispatch.detail
+        };
+
+        let ctx = context.clone();
+        let rule = d.rule.clone();
+        let due_at = d.due_at;
+        let error_for_log = error.clone();
+        let detail_for_log = detail.clone();
+        let recorded = spawn_blocking(move || {
+            record_trigger_execution(&ctx, &rule, due_at, status, &error, &detail)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("record task panicked: {e}"))?;
+        match recorded {
+            Ok(()) => {
+                if status == "success" {
+                    outcome.fired += 1;
+                    info!(
+                        rule_id = %d.rule.id,
+                        label = %d.rule.label,
+                        detail = %detail_for_log,
+                        "trigger rule fired (action dispatched, result note saved)"
+                    );
+                } else {
+                    outcome.failed += 1;
+                    warn!(
+                        rule_id = %d.rule.id,
+                        label = %d.rule.label,
+                        error = %error_for_log,
+                        "trigger rule action failed"
+                    );
+                }
+            }
+            Err(e) => {
+                outcome.failed += 1;
+                warn!(rule_id = %d.rule.id, error = %e, "failed to record trigger execution");
+            }
+        }
+    }
+    Ok(outcome)
+}
+
 /// Background trigger-rule executor. Spawns a `tokio` task that periodically
 /// calls [`fire_due_rules_at`] against the supplied [`StorageContext`] until
 /// the cancellation token fires.
@@ -506,8 +826,9 @@ impl TriggerExecutor {
 
     /// Run the executor loop until `cancel` is cancelled. Each tick:
     /// 1. Clones the [`StorageContext`] (cheap — it is `Arc`-backed).
-    /// 2. Calls [`fire_due_rules_at`] inside `spawn_blocking` (SQLite is
-    ///    synchronous).
+    /// 2. Runs [`fire_due_rules_with_dispatch`] (schedule evaluation in
+    ///    `spawn_blocking` — SQLite is synchronous — then async AI dispatch
+    ///    for each due rule).
     /// 3. Sleeps `tick_interval`, or returns early if cancelled.
     ///
     /// Errors inside a tick are logged and swallowed — a single failed tick
@@ -521,22 +842,20 @@ impl TriggerExecutor {
             // Race the tick against cancellation so shutdown is prompt.
             let tick = async {
                 let ctx = self.context.clone();
-                match spawn_blocking(move || fire_due_rules_at(&ctx, Utc::now())).await {
-                    Ok(Ok(outcome)) => {
-                        if outcome.fired > 0 || outcome.failed > 0 {
+                match fire_due_rules_with_dispatch(&ctx, Utc::now()).await {
+                    Ok(outcome) => {
+                        if outcome.fired > 0 || outcome.failed > 0 || outcome.skipped > 0 {
                             info!(
                                 evaluated = outcome.evaluated,
                                 fired = outcome.fired,
                                 failed = outcome.failed,
+                                skipped = outcome.skipped,
                                 "trigger tick complete"
                             );
                         }
                     }
-                    Ok(Err(e)) => {
-                        warn!(error = %e, "trigger tick failed");
-                    }
                     Err(e) => {
-                        warn!(error = %e, "trigger tick task panicked");
+                        warn!(error = %e, "trigger tick failed");
                     }
                 }
                 time::sleep(self.tick_interval).await;
@@ -549,6 +868,15 @@ impl TriggerExecutor {
                 _ = tick => {}
             }
         }
+    }
+
+    /// Run the executor loop for the lifetime of the process — no
+    /// cancellation wiring. Convenience for embedding hosts (the Tauri
+    /// desktop / mobile app) that want the scheduler alive as long as the
+    /// app itself runs; they cannot easily construct a
+    /// `CancellationToken` without depending on `tokio-util` directly.
+    pub async fn run_forever(self) {
+        self.spawn(CancellationToken::new()).await;
     }
 }
 
@@ -1355,5 +1683,169 @@ mod tests {
             "rule with unsatisfied FrontmatterEquals must NOT fire"
         );
         assert_eq!(outcome.skipped, 1);
+    }
+
+    // ── build_action_prompt (dispatch prompt construction) ──
+
+    #[test]
+    fn build_action_prompt_daily_review_mentions_recency_and_date() {
+        let rule = make_rule("dr", "0 9 * * *", TriggerAction::DailyReview);
+        let prompt = build_action_prompt(&rule, fixed_time()).expect("prompt");
+        assert!(
+            prompt.contains("Daily Review"),
+            "must identify the task: {prompt}"
+        );
+        assert!(
+            prompt.contains("2026-07-18"),
+            "must carry today's date: {prompt}"
+        );
+        assert!(prompt.to_lowercase().contains("24 hours"));
+    }
+
+    #[test]
+    fn build_action_prompt_custom_uses_effective_prompt() {
+        let mut rule = make_rule("cu", "0 9 * * *", TriggerAction::Custom);
+        rule.custom_prompt = Some("Summarize my meeting notes".into());
+        let prompt = build_action_prompt(&rule, fixed_time()).expect("prompt");
+        assert!(prompt.contains("Summarize my meeting notes"));
+    }
+
+    #[test]
+    fn build_action_prompt_custom_without_prompt_is_error() {
+        // #2842: a Custom rule with no prompt is a configuration error and
+        // must surface as such, never as an empty AI call.
+        let rule = make_rule("cnp", "0 9 * * *", TriggerAction::Custom);
+        let err = build_action_prompt(&rule, fixed_time()).expect_err("must fail");
+        assert!(
+            err.contains("no prompt"),
+            "error must explain the cause: {err}"
+        );
+    }
+
+    #[test]
+    fn build_action_prompt_process_webhook_rejected_for_cron() {
+        // A webhook action has no payload in a cron context — it must be
+        // rejected rather than silently running a meaningless prompt.
+        let rule = make_rule("wh", "0 9 * * *", TriggerAction::ProcessWebhook);
+        let err = build_action_prompt(&rule, fixed_time()).expect_err("must fail");
+        assert!(
+            err.contains("webhook"),
+            "error must explain the cause: {err}"
+        );
+    }
+
+    #[test]
+    fn build_action_prompt_all_predefined_actions_have_prompts() {
+        for action in [
+            TriggerAction::DailyReview,
+            TriggerAction::SummarizeAndTag,
+            TriggerAction::SuggestLinks,
+        ] {
+            let rule = make_rule("pa", "0 9 * * *", action);
+            assert!(
+                build_action_prompt(&rule, fixed_time()).is_ok(),
+                "{action:?} must build a prompt"
+            );
+        }
+    }
+
+    // ── fire_due_rules_with_dispatch (DB-backed integration) ──
+
+    #[test]
+    fn fire_due_rules_with_dispatch_records_failure_without_ai_config() {
+        // Without AI credentials the dispatch must fail *visibly*: a
+        // "failed" execution row with a non-empty error, and the rule's
+        // last_fired_at advanced so the same due time is not retried on
+        // every tick.
+        let (_tmp, ctx) = setup_context();
+        let rule = create_trigger_rule_with_context(
+            &ctx,
+            "Custom Task",
+            "cron",
+            "0 9 * * *",
+            "custom",
+            None,
+            Some("Summarize recent notes"),
+        )
+        .expect("create rule");
+
+        let now = fixed_time();
+        let outcome = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(fire_due_rules_with_dispatch(&ctx, now))
+            .expect("dispatch tick");
+        assert_eq!(outcome.evaluated, 1);
+        assert_eq!(outcome.fired, 0, "no AI configured — cannot succeed");
+        assert_eq!(outcome.failed, 1);
+
+        let (conn, _) = open_connection(&ctx).unwrap();
+        let (status, error): (String, String) = conn
+            .query_row(
+                "SELECT status, error FROM trigger_executions \
+                 WHERE rule_id = ?1 ORDER BY fired_at DESC LIMIT 1",
+                params![&rule.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("failed execution row must exist");
+        assert_eq!(status, "failed");
+        assert!(
+            !error.is_empty(),
+            "error column must carry the failure reason"
+        );
+
+        // last_fired_at must have advanced past the due time so the same
+        // due slot is not re-fired on the next tick.
+        let outcome2 = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(fire_due_rules_with_dispatch(&ctx, now))
+            .expect("second dispatch tick");
+        assert_eq!(
+            outcome2.failed, 0,
+            "same due time must not be retried after a recorded failure"
+        );
+    }
+
+    #[test]
+    fn fire_due_rules_with_dispatch_skips_unsatisfied_conditions_without_dispatch() {
+        // #3439 gate applies to the dispatching path too: a rule whose
+        // conditions cannot be satisfied from an empty cron context is
+        // skipped — no AI call, no execution row.
+        let (_tmp, ctx) = setup_context();
+        let rule = create_trigger_rule_with_context(
+            &ctx,
+            "Urgent Review",
+            "cron",
+            "0 9 * * *",
+            "daily_review",
+            None,
+            None,
+        )
+        .expect("create rule");
+        {
+            let (conn, _) = open_connection(&ctx).unwrap();
+            conn.execute(
+                "UPDATE trigger_rules SET conditions = ?1 WHERE id = ?2",
+                params![r#"[{"type":"tag_contains","tag":"urgent"}]"#, &rule.id],
+            )
+            .unwrap();
+        }
+
+        let outcome = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(fire_due_rules_with_dispatch(&ctx, fixed_time()))
+            .expect("dispatch tick");
+        assert_eq!(outcome.skipped, 1);
+        assert_eq!(outcome.fired, 0);
+        assert_eq!(outcome.failed, 0);
+
+        let (conn, _) = open_connection(&ctx).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM trigger_executions WHERE rule_id = ?1",
+                params![&rule.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "skipped rule must not produce an execution row");
     }
 }

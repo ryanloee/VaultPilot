@@ -118,6 +118,14 @@ export const tauriApi = {
       needs_rebuild: boolean;
       latest_disk_mtime: string;
     }>("vault_sync_status"),
+  discoverDevice: (ip: string) =>
+    invoke<{
+      hostname: string;
+      platform: string;
+      vaultPilotVersion: string;
+      noteCount: number;
+      vaultName: string;
+    } | null>("discover_device", { ip }),
   readImagePreview: (path: string) => invoke<string>("read_image_preview", { path }),
   openVaultDirectory: (path: string) => invoke<void>("open_vault_directory", { path }),
 

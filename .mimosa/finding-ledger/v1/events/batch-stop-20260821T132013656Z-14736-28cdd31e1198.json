@@ -1,0 +1,69 @@
+{
+  "schemaVersion": "mimosa-finding-ledger-batch/v1",
+  "batchId": "stop-20260821T132013656Z-14736-28cdd31e1198",
+  "runId": "20260821T132013656Z-14736-28cdd31e1198",
+  "runStatus": "completed",
+  "coverage": {
+    "status": "complete",
+    "reasons": []
+  },
+  "source": {
+    "component": "zcode-hook",
+    "operationId": "Stop"
+  },
+  "revision": "962ff442a4083ac522e554e4238bb153ad9ddff4",
+  "diffHash": "33a0ea3089a99e1b0b25a64748ca528664cec01f7ae6aa9f06eb2c31cabaa5d4",
+  "rulesVersion": "unavailable",
+  "sessionHash": "6cf9a23203d74cbee32de8a7ad79f951ea1ae313fb61933bdd32e8d7cade3e11",
+  "reportRef": ".mimosa/reports/task-review-sess_5783116f-0d62-454c-9739-a86a83821173-20260821T132013656Z-14736-28cdd31e1198.json",
+  "events": [],
+  "observedFindingIds": [],
+  "verifiedFiles": [
+    {
+      "file": "src/sync_discovery.rs",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "src/lib.rs",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "desktop/src-tauri/src/commands/sync.rs",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "desktop/src-tauri/src/commands/mod.rs",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "desktop/src-tauri/src/lib.rs",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "src/storage/pool.rs",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "desktop/src/components/settings/SyncPanel.tsx",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "desktop/src/lib/tauri.ts",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "desktop/src/lib/mock.ts",
+      "direct": "complete",
+      "projectContext": "partial"
+    }
+  ],
+  "recordedAt": "2026-08-21T13:20:14.257Z"
+}

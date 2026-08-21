@@ -234,6 +234,15 @@ export const mockApi = {
     needs_rebuild: false,
     latest_disk_mtime: new Date().toISOString(),
   }),
+  discoverDevice: async (
+    _ip: string
+  ): Promise<{
+    hostname: string;
+    platform: string;
+    vaultPilotVersion: string;
+    noteCount: number;
+    vaultName: string;
+  } | null> => null,
   loadNote: async (id: string): Promise<NoteDocument> => {
     const doc = noteDocs[id];
     if (!doc) throw new Error(`note not found: ${id}`);

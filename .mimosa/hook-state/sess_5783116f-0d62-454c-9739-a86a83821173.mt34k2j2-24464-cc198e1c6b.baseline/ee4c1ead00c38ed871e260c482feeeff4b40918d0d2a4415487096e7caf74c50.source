@@ -10,11 +10,23 @@ type SyncStatus = {
   latest_disk_mtime: string;
 };
 
+type DiscoveredDevice = {
+  hostname: string;
+  platform: string;
+  vaultPilotVersion: string;
+  noteCount: number;
+  vaultName: string;
+};
+
 export function SyncPanel({ vaultDir }: { vaultDir: string }) {
   const [status, setStatus] = useState<SyncStatus | null>(null);
   const [checking, setChecking] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [ip, setIp] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [device, setDevice] = useState<DiscoveredDevice | null>(null);
+  const [searchMsg, setSearchMsg] = useState<string | null>(null);
 
   const check = async () => {
     setChecking(true);
@@ -43,6 +55,26 @@ export function SyncPanel({ vaultDir }: { vaultDir: string }) {
     }
   };
 
+  const searchDevice = async () => {
+    if (!ip.trim()) return;
+    setSearching(true);
+    setDevice(null);
+    setSearchMsg(null);
+    try {
+      const found = await api.discoverDevice(ip.trim());
+      if (found) {
+        setDevice(found as DiscoveredDevice);
+        setSearchMsg(null);
+      } else {
+        setSearchMsg(`在 ${ip} 上未找到 VaultPilot 客户端（或对方未开启同步）`);
+      }
+    } catch (e) {
+      setSearchMsg(`搜索失败：${e}`);
+    } finally {
+      setSearching(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div>
@@ -66,6 +98,39 @@ export function SyncPanel({ vaultDir }: { vaultDir: string }) {
             ⧉
           </Button>
         </div>
+      </div>
+
+      {/* LAN device discovery — direct IP probe */}
+      <div className="rounded-md border border-border bg-muted/30 px-3 py-2 space-y-2">
+        <div className="text-xs text-muted-foreground">搜索局域网设备</div>
+        <div className="flex items-center gap-2">
+          <input
+            value={ip}
+            onChange={(e) => setIp(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && void searchDevice()}
+            placeholder="输入对方 IP（如 192.168.1.100）"
+            className="flex-1 rounded-md border border-border bg-background px-3 py-1.5 text-sm font-mono"
+          />
+          <Button size="sm" variant="outline" onClick={() => void searchDevice()} disabled={searching || !ip.trim()}>
+            {searching ? "搜索中…" : "搜索"}
+          </Button>
+        </div>
+        {searchMsg && <p className="text-xs text-muted-foreground">{searchMsg}</p>}
+        {device && (
+          <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="text-primary font-semibold">
+                {device.platform === "windows" ? "💻" : device.platform === "linux" ? "🐧" : "📱"}{" "}
+                {device.hostname}
+              </span>
+              <span className="text-muted-foreground">({ip})</span>
+            </div>
+            <div className="text-muted-foreground">
+              VaultPilot v{device.vaultPilotVersion} · {device.noteCount} 篇笔记 · {device.vaultName}
+            </div>
+            <div className="pt-1 text-muted-foreground italic">同步功能开发中 — 敬请期待</div>
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-2">

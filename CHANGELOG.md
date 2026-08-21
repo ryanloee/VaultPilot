@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.34] - 2026-08-21
+
+### BREAKING CHANGE
+- **Trigger results no longer write vault notes.** AI answers are stored inline in `trigger_executions.result_content` (database only) — trigger output will never appear in the note list again. Existing vault `[Trigger]` notes are unaffected but can be manually deleted.
+
+### Added
+- **Execution record deletion**: per-record ✕ button + "清空记录" clears all (`delete_trigger_execution` / `clear_trigger_executions` commands).
+- **LAN sync device discovery**: direct IP probe — enter an IP in Settings → 笔记同步 → "搜索局域网设备" to find other VaultPilot instances. Each desktop listens on port 37421 and answers `GET /hello` with device info (hostname, platform, version, note count, vault name). Input validated as strict IP format (blocks SSRF via hostname).
+- **Update download progress bar**: visible in the StatusBar on every page (progress bar + MB count + percentage); detailed progress in Settings → update section. Download state in the global Zustand store survives page switches.
+- **SyncPanel**: vault path display + one-click copy + "检测变更" (disk vs index comparison) + "重建索引" + Syncthing/Dropbox setup guide.
+
+### Fixed
+- **Clippy 1.98 CI failures**: `drain_collect` in `bases.rs`, `chunks_exact_to_as_chunks` in `settings.rs` — pre-existing lints surfaced by the new Rust stable.
+
 ## [0.7.33] - 2026-08-21
 
 ### Fixed

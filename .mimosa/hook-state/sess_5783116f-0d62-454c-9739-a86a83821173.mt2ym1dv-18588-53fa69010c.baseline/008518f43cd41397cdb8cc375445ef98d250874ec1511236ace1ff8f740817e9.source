@@ -348,6 +348,7 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
         // so calling it on every open is safe and cheap — same pattern as
         // ensure_attachment_columns / ensure_note_columns above.
         ensure_trigger_rule_columns(connection)?;
+        ensure_trigger_execution_columns(connection)?;
         return Ok(());
     }
 
@@ -502,6 +503,8 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
 
         -- Trigger execution log (#3048): one row per fired rule.
         -- Populated by the trigger executor (src/orchestration/trigger_executor.rs).
+        -- result_content stores the full AI answer directly (NOT as a vault note
+        -- — trigger output must not pollute the user's note library).
         CREATE TABLE IF NOT EXISTS trigger_executions (
             id TEXT PRIMARY KEY,
             rule_id TEXT NOT NULL,
@@ -510,7 +513,8 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
             fired_at TEXT NOT NULL,
             status TEXT NOT NULL,
             error TEXT NOT NULL DEFAULT '',
-            detail TEXT NOT NULL DEFAULT ''
+            detail TEXT NOT NULL DEFAULT '',
+            result_content TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS idx_trigger_executions_rule_id ON trigger_executions(rule_id);
         CREATE INDEX IF NOT EXISTS idx_trigger_executions_fired_at ON trigger_executions(fired_at);
@@ -553,6 +557,7 @@ pub(super) fn ensure_schema(connection: &Connection) -> Result<()> {
     // for the cron executor introduced in #3048. Older databases created
     // before #3048 ship without these columns.
     ensure_trigger_rule_columns(connection)?;
+    ensure_trigger_execution_columns(connection)?;
 
     // Idempotent migration: add hierarchical parent_id to collections for
     // nested collection trees (sub-collections). Older databases created
@@ -617,6 +622,32 @@ fn ensure_trigger_rule_columns(connection: &Connection) -> Result<()> {
         if !columns.contains(column) {
             connection.execute_batch(ddl)?;
         }
+    }
+    Ok(())
+}
+
+/// Add `result_content` to the `trigger_executions` table if missing —
+/// stores the AI answer inline instead of writing vault notes. Idempotent.
+fn ensure_trigger_execution_columns(connection: &Connection) -> Result<()> {
+    let table_exists: bool = connection.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='trigger_executions'",
+        [],
+        |row| row.get(0),
+    )?;
+    if !table_exists {
+        return Ok(());
+    }
+
+    let mut statement = connection.prepare("PRAGMA table_info(trigger_executions)")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<HashSet<_>>>()?;
+    drop(statement);
+
+    if !columns.contains("result_content") {
+        connection.execute_batch(
+            "ALTER TABLE trigger_executions ADD COLUMN result_content TEXT NOT NULL DEFAULT ''",
+        )?;
     }
     Ok(())
 }

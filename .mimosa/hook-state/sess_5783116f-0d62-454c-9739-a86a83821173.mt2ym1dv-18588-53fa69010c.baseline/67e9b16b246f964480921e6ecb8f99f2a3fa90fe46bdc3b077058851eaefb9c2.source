@@ -158,6 +158,10 @@ export const tauriApi = {
   listTriggerRules: () => invoke<TriggerRule[]>("list_trigger_rules"),
   listTriggerExecutions: (limit?: number) =>
     invoke<TriggerExecution[]>("list_trigger_executions", { limit }),
+  deleteTriggerExecution: (executionId: string) =>
+    invoke<boolean>("delete_trigger_execution", { executionId }),
+  clearTriggerExecutions: () =>
+    invoke<number>("clear_trigger_executions"),
   createTriggerRule: (
     label: string,
     triggerType: string,

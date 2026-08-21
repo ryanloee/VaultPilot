@@ -40,6 +40,19 @@ pub struct StorageContext {
 }
 
 impl StorageContext {
+    /// Vault directory name (e.g. "VaultPilotVault") — used by the sync
+    /// discovery server to identify this vault to other LAN instances.
+    pub fn vault_dir_name(&self) -> String {
+        self.paths
+            .default_vault_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("Vault")
+            .to_string()
+    }
+}
+
+impl StorageContext {
     pub(super) fn with_pool(paths: AppPaths) -> Result<Self> {
         let db_path = paths.database_path.clone();
         if let Some(parent) = db_path.parent() {

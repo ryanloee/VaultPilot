@@ -138,7 +138,8 @@ pub use feeds::{
 };
 // Re-export trigger_rules public API (#2984).
 pub use trigger_rules::{
-    create_trigger_rule_with_context, delete_trigger_rule_with_context,
+    clear_trigger_executions_with_context, create_trigger_rule_with_context,
+    delete_trigger_execution_with_context, delete_trigger_rule_with_context,
     get_trigger_rule_with_context, list_recent_trigger_executions_with_context,
     list_trigger_rules_with_context, list_trigger_rules_with_status_with_context,
     toggle_trigger_rule_with_context, update_trigger_rule_with_context, TriggerExecutionRecord,

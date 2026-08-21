@@ -5,5 +5,6 @@ pub mod chat;
 pub mod collections;
 pub mod notes;
 pub mod settings;
+pub mod sync;
 pub mod system;
 pub mod triggers;

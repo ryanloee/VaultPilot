@@ -49,6 +49,8 @@ pub fn run() {
             // than a silent crash inside the first command.
             let state = AppState::new().expect("failed to initialize app state");
             app.manage(state.clone());
+            let scheduler_storage = state.storage.clone();
+            let discovery_storage = state.storage.clone();
 
             // Spawn the trigger-rule scheduler so cron rules actually fire in
             // the desktop app. The rules UI only persists rows in
@@ -60,9 +62,28 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 let executor =
                     vaultpilot_lib::orchestration::trigger_executor::TriggerExecutor::new(
-                        (*state.storage).clone(),
+                        (*scheduler_storage).clone(),
                     );
                 executor.run_forever().await;
+            });
+
+            // LAN sync discovery server — listens on port 37421 and answers
+            // GET /hello with device info so other VaultPilot instances on
+            // the LAN can find us by IP. Non-fatal when the port is taken.
+            tauri::async_runtime::spawn(async move {
+                let storage = discovery_storage;
+                let (note_count, vault_name) = {
+                    let conn = match storage.get_connection() {
+                        Ok(c) => c,
+                        Err(_) => return,
+                    };
+                    let count: i64 = conn
+                        .query_row("SELECT COUNT(*) FROM notes", [], |r| r.get(0))
+                        .unwrap_or(0);
+                    (count as usize, storage.vault_dir_name())
+                };
+                vaultpilot_lib::sync_discovery::start_discovery_server(note_count, vault_name)
+                    .await;
             });
 
             // System tray so the app keeps running in the background when the
@@ -168,6 +189,8 @@ pub fn run() {
             commands::triggers::delete_trigger_rule,
             commands::triggers::delete_trigger_execution,
             commands::triggers::clear_trigger_executions,
+            // sync
+            commands::sync::discover_device,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

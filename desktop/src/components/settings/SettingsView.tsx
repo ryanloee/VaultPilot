@@ -10,6 +10,7 @@ import { isTauri } from "@/lib/mock";
 import { checkForUpdates, installUpdate, type PendingUpdate } from "@/lib/updater";
 import { applyAndPersistTheme, savedTheme, type Theme } from "@/lib/theme";
 import type { AppSettings, ProviderConfig, ProviderConnectionResult } from "@/types";
+import { SyncPanel } from "@/components/settings/SyncPanel";
 
 export function SettingsView() {
   const { settings, loading, error, load, save } = useSettingsStore();
@@ -340,6 +341,11 @@ export function SettingsView() {
             />
             笔记标题自动编号（1 / 1.1 / 1.1.2…，仅渲染层，不修改源文件）
           </label>
+        </section>
+
+        <Separator />
+        <section className="space-y-3">
+          <SyncPanel vaultDir={settings?.vaultDir ?? ""} />
         </section>
 
         {error && (

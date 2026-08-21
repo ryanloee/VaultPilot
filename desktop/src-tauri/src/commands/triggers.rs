@@ -212,6 +212,46 @@ pub async fn update_trigger_rule(
     .map_err(|e| e.to_string())?
 }
 
+/// Manually fire a rule right now ("立即触发" button) — bypasses the cron
+/// schedule and dispatches the action through the full AI pipeline.
+#[derive(Serialize, Deserialize)]
+pub struct FireNowResult {
+    pub success: bool,
+    pub error: Option<String>,
+    pub detail: Option<String>,
+}
+
+#[tauri::command]
+pub async fn fire_trigger_rule_now(
+    state: tauri::State<'_, AppState>,
+    rule_id: String,
+) -> Result<FireNowResult, String> {
+    let ctx = state.storage.clone();
+    initialize_storage_async(&ctx)
+        .await
+        .map_err(|e| e.to_string())?;
+    let result =
+        vaultpilot_lib::orchestration::trigger_executor::fire_trigger_rule_now(&ctx, &rule_id)
+            .await
+            .map_err(|e| e.to_string())?;
+    match result {
+        None => Err(format!("rule not found: {rule_id}")),
+        Some(d) => Ok(FireNowResult {
+            success: d.status == "success",
+            error: if d.error.is_empty() {
+                None
+            } else {
+                Some(d.error)
+            },
+            detail: if d.detail.is_empty() {
+                None
+            } else {
+                Some(d.detail)
+            },
+        }),
+    }
+}
+
 #[tauri::command]
 pub async fn toggle_trigger_rule(
     state: tauri::State<'_, AppState>,

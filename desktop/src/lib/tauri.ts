@@ -111,6 +111,13 @@ export const tauriApi = {
   findBacklinks: (id: string) => invoke<BacklinkEntry[]>("find_backlinks", { id }),
   importMarkdown: (paths: string[]) => invoke<unknown>("import_markdown", { paths }),
   rebuildIndex: () => invoke<unknown>("rebuild_index"),
+  vaultSyncStatus: () =>
+    invoke<{
+      disk_files: number;
+      indexed_notes: number;
+      needs_rebuild: boolean;
+      latest_disk_mtime: string;
+    }>("vault_sync_status"),
   readImagePreview: (path: string) => invoke<string>("read_image_preview", { path }),
   openVaultDirectory: (path: string) => invoke<void>("open_vault_directory", { path }),
 
@@ -171,6 +178,11 @@ export const tauriApi = {
     invoke<boolean>("toggle_trigger_rule", { ruleId }),
   deleteTriggerRule: (ruleId: string) =>
     invoke<boolean>("delete_trigger_rule", { ruleId }),
+  fireTriggerRuleNow: (ruleId: string) =>
+    invoke<{ success: boolean; error: string | null; detail: string | null }>(
+      "fire_trigger_rule_now",
+      { ruleId }
+    ),
   updateTriggerRule: (
     ruleId: string,
     label: string,

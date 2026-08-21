@@ -555,10 +555,10 @@ Today's date: {date}"#
 /// Outcome of dispatching one rule's action. `status` is `"success"` or
 /// `"failed"` — the same contract as the `trigger_executions.status` column
 /// (#3055).
-struct ActionDispatch {
-    status: &'static str,
-    error: String,
-    detail: String,
+pub struct ActionDispatch {
+    pub status: &'static str,
+    pub error: String,
+    pub detail: String,
 }
 
 impl ActionDispatch {
@@ -632,10 +632,15 @@ async fn dispatch_rule_action(
         rule.label,
         local_now.format("%Y-%m-%d %H:%M")
     );
+    // NB: the source MUST be unique per fire. `save_note_with_context`
+    // performs source-based dedup (#3077) — a shared "trigger_rule" value
+    // made every fire OVERWRITE the previous result note instead of
+    // creating a new one, so the user only ever saw the latest fire.
+    let source = format!("trigger_rule:{}:{}", rule.id, now.timestamp());
     let meta = NoteMeta {
         title: title.clone(),
         summary: answer.chars().take(300).collect(),
-        source: "trigger_rule".to_string(),
+        source,
         tags: vec!["trigger".to_string(), action_str.clone()],
         ..Default::default()
     };
@@ -688,6 +693,38 @@ async fn dispatch_rule_action(
 /// a real dispatch, so a "success" row means the action actually ran and its
 /// result note exists (`detail` carries the note id).
 ///
+/// Fire a single rule by ID immediately, bypassing the cron schedule.
+///
+/// This is the backend for the UI's "立即触发" button: it loads the rule
+/// (enabled or not), dispatches its action through the full AI pipeline,
+/// and records the outcome. Returns `Ok(None)` when the rule does not exist.
+pub async fn fire_trigger_rule_now(
+    context: &StorageContext,
+    rule_id: &str,
+) -> Result<Option<ActionDispatch>> {
+    let ctx = context.clone();
+    let rule_id = rule_id.to_string();
+    let rule = spawn_blocking(move || {
+        crate::storage::trigger_rules::get_trigger_rule_with_context(&ctx, &rule_id)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("rule lookup task panicked: {e}"))??;
+    let Some(rule) = rule else { return Ok(None) };
+    let now = Utc::now();
+    let dispatch = dispatch_rule_action(context, &rule, now).await;
+    // Record the outcome; the "fire" timestamp is now (manual trigger).
+    // Clone the fields before the move closure so we can still return them.
+    let status = dispatch.status;
+    let error = dispatch.error.clone();
+    let detail = dispatch.detail.clone();
+    let ctx = context.clone();
+    let _ = spawn_blocking(move || {
+        record_trigger_execution(&ctx, &rule, Utc::now(), status, &error, &detail)
+    })
+    .await;
+    Ok(Some(dispatch))
+}
+
 /// Dispatch failures are recorded as `"failed"` executions (and still advance
 /// `last_fired_at`) — a rule whose AI call fails must not re-fire on every
 /// tick for the same due time.
@@ -1208,6 +1245,54 @@ mod tests {
         let next = next_due_time_at("0 9 * * *", from).expect("should have a next fire");
         // At 09:30 the next 09:00 fire is tomorrow.
         assert_eq!(next, Utc.with_ymd_and_hms(2026, 7, 19, 9, 0, 0).unwrap());
+    }
+
+    /// Regression: consecutive fires must create SEPARATE result notes.
+    /// The old code used `source: "trigger_rule"` for every fire, and
+    /// `save_note_with_context`'s source-based dedup (#3077) reused the
+    /// existing note id — each fire silently OVERWROTE the previous
+    /// result, so the user only ever saw the latest one.
+    #[test]
+    fn consecutive_fires_create_separate_notes() {
+        let (_tmp, ctx) = setup_context();
+        create_trigger_rule_with_context(
+            &ctx,
+            "Daily 9am",
+            "cron",
+            "0 9 * * *",
+            "daily_review",
+            None,
+            None,
+        )
+        .expect("create rule");
+
+        // Fire across two consecutive days.
+        let day1 = Utc.with_ymd_and_hms(2026, 7, 18, 9, 30, 0).unwrap();
+        let day2 = Utc.with_ymd_and_hms(2026, 7, 19, 9, 30, 0).unwrap();
+
+        let outcome1 = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(fire_due_rules_with_dispatch(&ctx, day1))
+            .expect("fire day1");
+        assert!(
+            outcome1.failed >= 1,
+            "no AI config — dispatch fails but records"
+        );
+
+        let outcome2 = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(fire_due_rules_with_dispatch(&ctx, day2))
+            .expect("fire day2");
+        assert!(outcome2.failed >= 1);
+
+        // Both fires must be recorded as separate executions.
+        let (conn, _) = open_connection(&ctx).unwrap();
+        let exec_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM trigger_executions", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(exec_count, 2, "two fires must be recorded");
     }
 
     #[test]

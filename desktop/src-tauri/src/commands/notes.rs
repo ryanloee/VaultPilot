@@ -9,8 +9,9 @@ use std::path::Path;
 use vaultpilot_lib::models::NoteDocument;
 use vaultpilot_lib::storage::{
     delete_note_async, find_backlinks_async, find_related_notes_async, get_snapshot_async,
-    import_markdown_async, list_notes_async, list_snapshots_for_note_async, load_note_async,
-    rebuild_index_async, restore_snapshot_async, save_note_async,
+    import_markdown_async, initialize_storage_async, list_notes_async,
+    list_snapshots_for_note_async, load_note_async, rebuild_index_async, restore_snapshot_async,
+    save_note_async,
 };
 
 #[tauri::command]
@@ -93,6 +94,89 @@ pub async fn rebuild_index(state: tauri::State<'_, AppState>) -> Result<serde_js
         .await
         .map_err(|e| e.to_string())?;
     serde_json::to_value(&v).map_err(|e| e.to_string())
+}
+
+/// Sync status: compare vault directory (markdown files on disk) against the
+/// search index so the UI can tell the user whether a rebuild is needed
+/// after an external sync tool (Syncthing / Dropbox) touched the folder.
+#[derive(serde::Serialize)]
+pub struct VaultSyncStatus {
+    /// Total .md files found under the vault directory.
+    pub disk_files: usize,
+    /// Total notes currently in the SQLite index.
+    pub indexed_notes: usize,
+    /// True when disk_files != indexed_notes → a rebuild is recommended.
+    pub needs_rebuild: bool,
+    /// Latest file modification timestamp on disk (RFC3339, or empty).
+    pub latest_disk_mtime: String,
+}
+
+#[tauri::command]
+pub async fn vault_sync_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<VaultSyncStatus, String> {
+    let settings = initialize_storage_async(&state.storage)
+        .await
+        .map_err(|e| e.to_string())?;
+    let vault_dir = std::path::PathBuf::from(&settings.vault_dir);
+
+    let ctx = state.storage.clone();
+    tokio::task::spawn_blocking(move || {
+        /// Recursive .md file scan using std::fs (the desktop crate does not
+        /// depend on walkdir). Returns (count, latest_mtime).
+        fn scan_md_files(dir: &Path, count: &mut usize, latest: &mut std::time::SystemTime) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.filter_map(|e| e.ok()) {
+                let Ok(ft) = entry.file_type() else { continue };
+                if ft.is_dir() {
+                    scan_md_files(&entry.path(), count, latest);
+                } else if ft.is_file() {
+                    let is_md = entry
+                        .path()
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
+                    if is_md {
+                        *count += 1;
+                        if let Ok(meta) = entry.metadata() {
+                            if let Ok(mtime) = meta.modified() {
+                                if mtime > *latest {
+                                    *latest = mtime;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut disk_files = 0usize;
+        let mut latest_mtime = std::time::SystemTime::UNIX_EPOCH;
+        scan_md_files(&vault_dir, &mut disk_files, &mut latest_mtime);
+
+        let connection = ctx
+            .get_connection()
+            .map_err(|e| format!("failed to get connection: {e}"))?;
+        let indexed: i64 = connection
+            .query_row("SELECT COUNT(*) FROM notes", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+
+        let latest_disk_mtime = if latest_mtime == std::time::SystemTime::UNIX_EPOCH {
+            String::new()
+        } else {
+            chrono::DateTime::<chrono::Utc>::from(latest_mtime).to_rfc3339()
+        };
+
+        Ok(VaultSyncStatus {
+            disk_files,
+            indexed_notes: indexed as usize,
+            needs_rebuild: disk_files != indexed as usize,
+            latest_disk_mtime,
+        })
+    })
+    .await
+    .map_err(|e| format!("sync check task failed: {e}"))?
 }
 
 #[tauri::command]

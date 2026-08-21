@@ -7,26 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.32] - 2026-08-21
+
+### Added
+- Desktop: 笔记同步面板（SyncPanel）——vault 路径展示 + 一键复制 + 「检测变更」对比磁盘/索引 + 「重建索引」按钮 + Syncthing/Dropbox 设置指引。
+- Desktop: ⚡「立即触发」按钮——跳过 cron 调度，按规则 ID 立即执行完整 AI 派发管线（`fire_trigger_rule_now`）。
+- Desktop: 执行记录可点击——展开显示该次触发生成的结果笔记全文（`load_note` 取正文）。
+- Desktop: `vault_sync_status` 命令——扫描 vault 目录 .md 文件数量 + 最新修改时间，与 SQLite 索引对比，返回 `needs_rebuild` 标志。
+
+### Fixed
+- **Trigger result notes always overwritten (source dedup bug #3077)**：`save_note_with_context` 的 source 去重逻辑复用了相同 `source=trigger_rule` 的笔记 ID——每次触发覆盖上一次结果而非新建。修复：source 改为 `trigger_rule:{rule_id}:{timestamp}`，每次触发独立。
+- **Note title was UTC**: dispatch dispatch now uses local wall-clock in title/footer。
+
 ## [0.7.31] - 2026-08-20
 
 ### Added
-- **Trigger dispatch**: scheduled rules now execute real actions via the grounded AI pipeline (`ask_with_ai_with_context`), save the answer as a vault note, and record the outcome (success with note id + token usage / failed with error) in `trigger_executions`.
-- **Desktop scheduler**: `TriggerExecutor::run_forever()` is spawned in Tauri setup so trigger rules actually fire in the desktop app (previously only CLI `trigger start` ran the executor).
-- **Trigger rule edit**: full CRUD — `update_trigger_rule` command added; TriggerView shows ✎ edit button with time/action/prompt pre-fill and cron ↔ local-time conversion.
-- **Trigger visibility**: per-rule status line (last fire / next fire / count / last error) + "最近执行记录" panel (30 entries, auto-refresh every 30 s) + token usage (`tokens_in / tokens_out`) on success rows.
-- **Token usage in GroundedAnswer**: new fields `usageInputTokens` / `usageOutputTokens` propagated through the ask pipeline to the frontend and trigger execution detail.
-- **CLI `trigger fire-now`**: now runs the full dispatch path (same as the background executor).
-- **Next-fire freshness**: `list_trigger_rules_with_status_with_context` recomputes `next_fire_at` on read for enabled cron rules — no stale times after edits.
-- **Trigger config validation**: `create_trigger_rule_with_context` / `update_trigger_rule_with_context` reject invalid cron expressions via `next_due_time_at`; never silently store a rule that can never fire.
+- **Trigger dispatch**: scheduled rules execute grounded AI pipeline (`ask_with_ai_with_context`), save answer as vault note, record trigger_executions with token usage.
+- **Desktop scheduler**: `TriggerExecutor::run_forever()` spawned in Tauri setup so rules fire in the desktop app (previously only CLI `trigger start`).
+- **Trigger rule edit**: `update_trigger_rule` command + ✎ edit button with time/action/prompt pre-fill and cron ↔ local-time conversion.
+- **Trigger visibility**: per-rule status line (last/next fire / count / error) + recent executions panel (30 entries, 30 s auto-refresh) + token usage on success rows.
+- **Token usage in GroundedAnswer**: `usageInputTokens` / `usageOutputTokens` propagated through ask pipeline and trigger execution detail.
+- **CLI `trigger fire-now`**: runs the full dispatch path (same as background executor).
+- **Next-fire freshness**: `list_trigger_rules_with_status_with_context` recomputes `next_fire_at` on read; never-fired rules show a next-fire time.
+- **Trigger config validation**: `create_trigger_rule_with_context` / `update_trigger_rule_with_context` reject invalid cron expressions (silent "never fires" trap).
 
 ### Fixed
-- **CJK search completely broken** (root cause of "笔记里有记录但 AI 搜不到就编"): `note_fts` used unicode61 with raw text — contiguous CJK was one giant token so Chinese term queries never hit. All FTS writes now run through `tokenize_cjk_for_fts` (CJK runs → bigram); `make_fts_query` OR-joins terms; v1 → v2 migration rebuilds indexes from disk on first open.
-- **Noise word `"怎么刷"` swallowed the verb**: removed; remaining terms sorted longest-first to fix prefix overlap ("一下子" vs "一下").
-- **Empty model answer fabricated canned text**: `parse_or_fallback_answer` replaced by strict `parse_model_answer` — empty content is an error; `fallback_answer` removed.
-- **Trigger rule `next_fire_at` went stale after edit**: now recomputed fresh from the expression on read; never-fired rules show a next-fire time.
-- **Invalid cron expressions accepted silently**: stored-but-unparseable expressions are now rejected at write time (the silent "never fires" trap).
-- **Note title timestamp was UTC**: dispatch now uses local wall-clock for title and footer.
-- **`parseInt(x) || fallback` bug in `fromCron`**: midnight UTC (0) was turned into 8; now uses `Number.isFinite` check. Cron weekday range expressions (`1-5`) now parsed correctly.
+- **CJK search completely broken**: `note_fts` used unicode61 with raw text — contiguous CJK was one giant token, Chinese term queries never hit. All FTS writes use `tokenize_cjk_for_fts` (CJK → bigram); `make_fts_query` OR-joins; v1→v2 migration rebuilds from disk.
+- **Noise word `"怎么刷"` swallowed verb**: removed; terms sorted longest-first.
+- **Empty model answer fabricated canned text**: `parse_or_fallback_answer` → strict `parse_model_answer` (error on empty); `fallback_answer` removed.
+- **`next_fire_at` went stale after edit**: recomputed fresh on read; never-fired rules show next-fire time.
+- **Invalid cron accepted silently**: rejected at write time.
+- **`parseInt(x) || fallback` bug in `fromCron`**: midnight UTC (0) → 8; fixed with `Number.isFinite`.
 
 ## [0.7.30] - 2026-08-19
 

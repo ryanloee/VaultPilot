@@ -133,6 +133,7 @@ pub fn run() {
             commands::notes::find_backlinks,
             commands::notes::import_markdown,
             commands::notes::rebuild_index,
+            commands::notes::vault_sync_status,
             commands::notes::read_image_preview,
             commands::notes::open_vault_directory,
             commands::notes::list_snapshots,
@@ -162,6 +163,7 @@ pub fn run() {
             commands::triggers::list_trigger_executions,
             commands::triggers::create_trigger_rule,
             commands::triggers::update_trigger_rule,
+            commands::triggers::fire_trigger_rule_now,
             commands::triggers::toggle_trigger_rule,
             commands::triggers::delete_trigger_rule,
         ])

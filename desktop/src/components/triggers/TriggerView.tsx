@@ -216,6 +216,12 @@ export function TriggerView() {
   const [newAction, setNewAction] = useState("daily_review");
   const [newPrompt, setNewPrompt] = useState("");
   const [creating, setCreating] = useState(false);
+  /** Rule currently being fired via the ⚡ button (shows spinner). */
+  const [firingRuleId, setFiringRuleId] = useState<string | null>(null);
+  /** Execution whose result note is expanded inline. */
+  const [expandedExecId, setExpandedExecId] = useState<string | null>(null);
+  /** Loaded note body for the expanded execution. */
+  const [expandedNoteBody, setExpandedNoteBody] = useState<string | null>(null);
 
   const formOpen = addOpen || editingRule !== null;
   /** Event rules keep their trigger config in this UI — only cron schedules
@@ -338,6 +344,41 @@ export function TriggerView() {
       setRules((prev) => prev.filter((r) => r.id !== id));
     } catch (e) {
       setError(String(e));
+    }
+  };
+
+  /** ⚡ Fire a rule right now, bypassing the schedule. */
+  const handleFireNow = async (id: string) => {
+    setFiringRuleId(id);
+    try {
+      const result = await api.fireTriggerRuleNow(id);
+      if (!result.success && result.error) {
+        setError(`触发失败：${result.error}`);
+      }
+      await load();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setFiringRuleId(null);
+    }
+  };
+
+  /** Click an execution row → toggle inline display of the result note. */
+  const toggleExecExpand = async (exec: TriggerExecution) => {
+    if (expandedExecId === exec.id) {
+      setExpandedExecId(null);
+      setExpandedNoteBody(null);
+      return;
+    }
+    const noteId = exec.detail.match(/note_id=([a-f0-9-]+)/)?.[1];
+    setExpandedExecId(exec.id);
+    setExpandedNoteBody(null);
+    if (!noteId) return;
+    try {
+      const doc = await api.loadNote(noteId);
+      setExpandedNoteBody(doc.body);
+    } catch {
+      setExpandedNoteBody("（无法加载笔记内容 — 笔记可能已被删除）");
     }
   };
 
@@ -532,6 +573,19 @@ export function TriggerView() {
               )}
             </div>
             <button
+              onClick={() => handleFireNow(rule.id)}
+              disabled={firingRuleId === rule.id}
+              className={cn(
+                "shrink-0 rounded p-1 transition-colors",
+                firingRuleId === rule.id
+                  ? "text-muted-foreground animate-pulse"
+                  : "text-muted-foreground hover:bg-primary/10 hover:text-primary"
+              )}
+              title="立即触发"
+            >
+              {firingRuleId === rule.id ? "…" : "⚡"}
+            </button>
+            <button
               onClick={() => startEdit(rule)}
               className={cn(
                 "shrink-0 rounded p-1 transition-colors",
@@ -566,34 +620,54 @@ export function TriggerView() {
               // detail carries "note_id=… tokens_in=… tokens_out=…" on success —
               // surface the token counts so quota consumption is visible.
               const tokens = e.detail.match(/tokens_in=(\d+).*tokens_out=(\d+)/);
+              const hasNote = e.detail.includes("note_id=");
+              const expanded = expandedExecId === e.id;
               return (
-                <div
-                  key={e.id}
-                  className="flex items-center gap-2 rounded-md border border-border px-2 py-1.5 text-xs"
-                >
-                  <span
+                <div key={e.id}>
+                  <div
+                    onClick={() => hasNote && toggleExecExpand(e)}
                     className={cn(
-                      "shrink-0 rounded px-1.5 py-0.5",
-                      e.status === "success"
-                        ? "bg-primary/10 text-primary"
-                        : "bg-destructive/10 text-destructive"
+                      "flex items-center gap-2 rounded-md border border-border px-2 py-1.5 text-xs",
+                      hasNote && "cursor-pointer hover:bg-accent/50 transition-colors"
                     )}
+                    title={hasNote ? "点击查看结果笔记" : undefined}
                   >
-                    {e.status === "success" ? "成功" : "失败"}
-                  </span>
-                  <span className="shrink-0 text-muted-foreground font-mono">{fmtTime(e.firedAt)}</span>
-                  <span className="shrink-0 truncate max-w-[30%]" title={ACTION_LABELS[e.action] ?? e.action}>
-                    {e.label}
-                  </span>
-                  {e.status === "success" && tokens && (
-                    <span className="shrink-0 text-muted-foreground" title={e.detail}>
-                      ⤵ {tokens[1]} / {tokens[2]} tokens
+                    <span
+                      className={cn(
+                        "shrink-0 rounded px-1.5 py-0.5",
+                        e.status === "success"
+                          ? "bg-primary/10 text-primary"
+                          : "bg-destructive/10 text-destructive"
+                      )}
+                    >
+                      {e.status === "success" ? "成功" : "失败"}
                     </span>
-                  )}
-                  {e.status === "failed" && e.error && (
-                    <span className="min-w-0 flex-1 truncate text-destructive" title={e.error}>
-                      {e.error}
+                    <span className="shrink-0 text-muted-foreground font-mono">{fmtTime(e.firedAt)}</span>
+                    <span className="shrink-0 truncate max-w-[30%]" title={ACTION_LABELS[e.action] ?? e.action}>
+                      {e.label}
                     </span>
+                    {e.status === "success" && tokens && (
+                      <span className="shrink-0 text-muted-foreground" title={e.detail}>
+                        ⤵ {tokens[1]} / {tokens[2]} tokens
+                      </span>
+                    )}
+                    {e.status === "failed" && e.error && (
+                      <span className="min-w-0 flex-1 truncate text-destructive" title={e.error}>
+                        {e.error}
+                      </span>
+                    )}
+                    {hasNote && (
+                      <span className="ml-auto shrink-0 text-muted-foreground">
+                        {expanded ? "▲" : "▼"}
+                      </span>
+                    )}
+                  </div>
+                  {expanded && (
+                    <div className="mt-1 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs max-h-48 overflow-auto vp-scroll whitespace-pre-wrap break-words">
+                      {expandedNoteBody === null
+                        ? "加载笔记内容…"
+                        : expandedNoteBody || "（笔记内容为空）"}
+                    </div>
                   )}
                 </div>
               );

@@ -222,6 +222,18 @@ export const mockApi = {
   },
 
   listNotes: async (): Promise<NoteMeta[]> => [...notes],
+  rebuildIndex: async (): Promise<unknown> => ({ status: "rebuilt" }),
+  vaultSyncStatus: async (): Promise<{
+    disk_files: number;
+    indexed_notes: number;
+    needs_rebuild: boolean;
+    latest_disk_mtime: string;
+  }> => ({
+    disk_files: 10,
+    indexed_notes: 10,
+    needs_rebuild: false,
+    latest_disk_mtime: new Date().toISOString(),
+  }),
   loadNote: async (id: string): Promise<NoteDocument> => {
     const doc = noteDocs[id];
     if (!doc) throw new Error(`note not found: ${id}`);
@@ -382,6 +394,13 @@ export const mockApi = {
   }),
   toggleTriggerRule: async (_ruleId: string): Promise<boolean> => true,
   deleteTriggerRule: async (_ruleId: string): Promise<boolean> => true,
+  fireTriggerRuleNow: async (
+    _ruleId: string
+  ): Promise<{ success: boolean; error: string | null; detail: string | null }> => ({
+    success: true,
+    error: null,
+    detail: "note_id=mock-note-fire-now",
+  }),
   updateTriggerRule: async (
     ruleId: string,
     label: string,

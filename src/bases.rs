@@ -297,7 +297,7 @@ impl BaseConfig {
     /// Fields in `new_order` that don't exist as columns are created.
     pub fn reorder_columns(&mut self, new_order: &[String]) {
         let mut reordered: Vec<BaseColumn> = Vec::with_capacity(new_order.len());
-        let mut remaining: Vec<BaseColumn> = self.columns.drain(..).collect();
+        let mut remaining: Vec<BaseColumn> = std::mem::take(&mut self.columns);
 
         for field in new_order {
             if let Some(pos) = remaining.iter().position(|c| c.field == *field) {

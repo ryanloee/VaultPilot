@@ -11,9 +11,11 @@ import { checkForUpdates, installUpdate, type PendingUpdate } from "@/lib/update
 import { applyAndPersistTheme, savedTheme, type Theme } from "@/lib/theme";
 import type { AppSettings, ProviderConfig, ProviderConnectionResult } from "@/types";
 import { SyncPanel } from "@/components/settings/SyncPanel";
+import { useUpdaterStore } from "@/lib/store";
 
 export function SettingsView() {
   const { settings, loading, error, load, save } = useSettingsStore();
+  const { phase: dlPhase, downloaded, total: dlTotal, version: dlVersion } = useUpdaterStore();
   const [draft, setDraft] = useState<AppSettings | null>(null);
   const [theme, setTheme] = useState<Theme>("system");
   const [testing, setTesting] = useState(false);
@@ -320,6 +322,34 @@ export function SettingsView() {
           </div>
           {!updaterAvailable && (
             <p className="text-xs text-muted-foreground">仅桌面端支持应用内更新。</p>
+          )}
+          {/* Download progress bar — reads from the global updater store so it
+              survives page switches and stays in sync with the StatusBar. */}
+          {dlPhase === "downloading" && (
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>正在下载 v{dlVersion}…</span>
+                <span className="font-mono">
+                  {dlTotal > 0
+                    ? `${(downloaded / 1048576).toFixed(1)} / ${(dlTotal / 1048576).toFixed(1)} MB`
+                    : `${(downloaded / 1048576).toFixed(1)} MB`}
+                </span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-all duration-300"
+                  style={{ width: dlTotal > 0 ? `${Math.round((downloaded / dlTotal) * 100)}%` : "0%" }}
+                />
+              </div>
+            </div>
+          )}
+          {dlPhase === "ready" && (
+            <p className="text-xs text-green-600">
+              ✓ v{dlVersion} 已下载完成，重启后生效。
+            </p>
+          )}
+          {dlPhase === "error" && (
+            <p className="text-xs text-destructive">下载失败，请重试。</p>
           )}
           {updateState === "latest" && (
             <p className="text-xs text-green-600">当前已是最新版本。</p>

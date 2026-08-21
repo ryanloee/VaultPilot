@@ -1,0 +1,99 @@
+[package]
+name = "vaultpilot"
+version = "0.7.33"
+
+description = "Local-first knowledge-base assistant with Windows UI and cross-platform CLI"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/ryanloee/VaultPilot"
+homepage = "https://github.com/ryanloee/VaultPilot"
+
+[workspace]
+resolver = "2"
+members = [
+    ".",
+    "crates/mcp-connector",
+    "desktop/src-tauri",
+]
+
+[lib]
+name = "vaultpilot_lib"
+crate-type = ["rlib"]
+
+[features]
+default = ["email"]
+# Email-to-Vault integration (IMAP). Disabled on targets where OpenSSL
+# cross-compilation is impractical (e.g. Android); the desktop/CLI keep it.
+email = ["dep:imap", "dep:mailparse", "dep:native-tls"]
+
+[dependencies]
+aes-gcm = "0.11"
+anyhow = "1"
+libc = "0.2"
+async-trait = "0.1"
+axum = { version = "0.8", features = ["http1", "json", "multipart"] }
+base64 = "0.23"
+chrono = { version = "0.4", features = ["serde"] }
+deunicode = "1"
+hostname = "0.4"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "multipart"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+rusqlite = { version = "0.32", features = ["bundled", "backup"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml_ng = "0.10"
+sha2 = "0.10"
+subtle = "2"
+tokio = { version = "1", features = ["net", "process", "time", "rt-multi-thread", "signal", "io-util", "io-std", "fs", "sync"] }
+tokio-stream = "0.1"
+tokio-util = "0.7"
+tower-http = { version = "0.7", features = ["cors", "timeout", "limit"] }
+# Cross-platform blocking subprocess wait-with-timeout + kill, used by the
+# external agent engine to enforce its `max_duration` deadline (#2284).
+wait-timeout = "0.2"
+uuid = { version = "1", features = ["v4", "serde"] }
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+walkdir = "2"
+url = "2"
+bytes = "1"
+futures-util = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+zip = "8.6.0"
+cron = "0.17"
+feed-rs = "2.4"
+imap = { version = "3.0.0-alpha.15", optional = true }
+mailparse = { version = "0.16", optional = true }
+native-tls = { version = "0.2", optional = true }
+pdf-extract = "0.12"
+keyring = "4.1.5"
+pbkdf2 = { version = "0.12", features = ["sha2"] }
+
+[[bin]]
+name = "vaultpilot-cli"
+path = "src/bin/vaultpilot-cli/main.rs"
+
+[[bin]]
+name = "vaultpilot-agent"
+path = "src/bin/vaultpilot-agent.rs"
+
+# PBKDF2 (600k iterations, machine-key + PIN hashing) is hot on the startup
+# path. Compile the crypto crates with optimizations even in dev builds so
+# debug-mode startup stays snappy (previously a hand-rolled pure-Rust loop
+# took multiple seconds in unoptimized builds). codegen-units must drop from
+# the dev default (256) too: without cross-CGU inlining, sha2's compression
+# loop runs ~40x slower despite opt-level=3.
+[profile.dev.package.pbkdf2]
+opt-level = 3
+codegen-units = 16
+
+[profile.dev.package.hmac]
+opt-level = 3
+codegen-units = 16
+
+[profile.dev.package.sha2]
+opt-level = 3
+codegen-units = 16

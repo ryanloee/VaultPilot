@@ -1,0 +1,1920 @@
+//! Vault Health Dashboard — analyze vault structure and generate
+//! optimization suggestions (#2014).
+//!
+//! Provides:
+//! - Note / collection / tag counts
+//! - Orphan note detection (no tags + no wiki-links)
+//! - Knowledge density score (link density, tag coverage, tag diversity)
+//! - Duplicate/similar title detection
+//! - AI-style improvement suggestions
+
+use std::collections::{HashMap, HashSet};
+
+use anyhow::Result;
+use tracing::{instrument, warn};
+
+use crate::models::{
+    BrokenLink, Collection, HealthReport, NoteMeta, TagCluster, TagMergeReason, TagVariant,
+};
+use crate::storage::{list_collections_with_context, load_settings_with_context, StorageContext};
+
+/// Maximum notes to analyze for orphan / link detection. If the vault has more
+/// notes than this, we sample the most recent ones to keep analysis fast.
+const HEALTH_ANALYSIS_MAX_NOTES: usize = 5_000;
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/// Generate a comprehensive vault health report.
+///
+/// This function queries the database, counts everything, detects orphans and
+/// duplicates, and produces human-readable suggestions.
+#[instrument(skip(context))]
+pub fn health_check(context: &StorageContext) -> Result<HealthReport> {
+    let conn = context.get_connection()?;
+    let _settings = load_settings_with_context(context)?;
+
+    // ── 1. Counts ──────────────────────────────────────────────────────
+    let total_notes: usize =
+        conn.query_row("SELECT COUNT(*) FROM notes", [], |row| row.get::<_, i64>(0))? as usize;
+
+    let total_collections: usize =
+        conn.query_row("SELECT COUNT(*) FROM collections", [], |row| {
+            row.get::<_, i64>(0)
+        })? as usize;
+
+    // ── 2. Load all notes (up to HEALTH_ANALYSIS_MAX_NOTES) ────────────
+    let all_notes = load_all_note_metas(&conn, total_notes)?;
+
+    // ── 3. Count unique tags ───────────────────────────────────────────
+    let mut unique_tags = HashSet::new();
+    for note in &all_notes {
+        for tag in &note.tags {
+            unique_tags.insert(tag.clone());
+        }
+    }
+    let total_tags = unique_tags.len();
+
+    // ── 4. Find orphan notes ───────────────────────────────────────────
+    let orphan_notes = find_orphan_notes(&conn, &all_notes)?;
+
+    // ── 5. Knowledge density score ─────────────────────────────────────
+    let knowledge_density_score =
+        calculate_knowledge_density(&conn, &all_notes, total_notes, total_tags)?;
+
+    // ── 6. Duplicate detection ─────────────────────────────────────────
+    let duplicate_clusters = detect_duplicate_clusters(&all_notes);
+    // Phase 4 (#3349): content-based exact dedup — catches notes with
+    // different titles but identical/very similar body content
+    let content_clusters = detect_content_duplicate_clusters(&conn, &all_notes)?;
+    let duplicate_clusters = merge_duplicate_clusters(duplicate_clusters, content_clusters);
+
+    // ── 7. Broken link detection (#3294) ───────────────────────────────
+    let broken_links = find_broken_links(&conn, &all_notes)?;
+
+    // ── 8. Tag sprawl detection (#3295) ────────────────────────────────
+    let tag_clusters = detect_tag_clusters(&all_notes);
+
+    // ── 9. Load collections for suggestions ───────────────────────────
+    let collections = list_collections_with_context(context)?;
+
+    // ── 10. Generate suggestions ──────────────────────────────────────
+    let suggestions = generate_suggestions(
+        &all_notes,
+        &orphan_notes,
+        &duplicate_clusters,
+        &collections,
+        &broken_links,
+        &tag_clusters,
+    );
+
+    Ok(HealthReport {
+        total_notes,
+        total_collections,
+        total_tags,
+        orphan_notes,
+        knowledge_density_score,
+        suggestions,
+        duplicate_clusters,
+        broken_links,
+        tag_clusters,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/// Load all note metas from the database (up to HEALTH_ANALYSIS_MAX_NOTES).
+fn load_all_note_metas(conn: &rusqlite::Connection, total: usize) -> Result<Vec<NoteMeta>> {
+    let limit = total.min(HEALTH_ANALYSIS_MAX_NOTES);
+    let mut stmt = conn.prepare(
+        "SELECT id, title, tags, keywords, platform, board, kernel, status, \
+         created_at, updated_at, source, path, summary \
+         FROM notes ORDER BY updated_at DESC LIMIT ?1",
+    )?;
+    let rows = stmt.query_map([limit], |row| {
+        let tags_raw: String = row.get(2)?;
+        let kw_raw: String = row.get(3)?;
+        Ok(NoteMeta {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            tags: match serde_json::from_str(&tags_raw) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to parse tags JSON, falling back to empty vec");
+                    Vec::new()
+                }
+            },
+            keywords: match serde_json::from_str(&kw_raw) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to parse keywords JSON, falling back to empty vec");
+                    Vec::new()
+                }
+            },
+            platform: row.get(4)?,
+            board: row.get(5)?,
+            kernel: row.get(6)?,
+            status: row.get(7)?,
+            created_at: row.get(8)?,
+            updated_at: row.get(9)?,
+            source: row.get(10)?,
+            path: row.get(11)?,
+            summary: row.get(12)?,
+            collections: Vec::new(),
+        })
+    })?;
+    let mut notes = Vec::with_capacity(limit);
+    for row in rows {
+        notes.push(row?);
+    }
+    Ok(notes)
+}
+
+/// Returns `true` if the note body (from `note_fts`) contains wiki-style links
+/// (`[[...]]`) or markdown links / URLs.
+fn body_has_links(conn: &rusqlite::Connection, note_id: &str) -> Result<bool> {
+    let body: String = match conn.query_row(
+        "SELECT body FROM note_fts WHERE note_id = ?1",
+        [note_id],
+        |row| row.get(0),
+    ) {
+        Ok(b) => b,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(false), // no FTS entry
+        Err(e) => {
+            tracing::warn!(error = %e, note_id = note_id, "failed to query note_fts for link check");
+            return Err(e.into());
+        }
+    };
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return Ok(false);
+    }
+    // Check for wiki-links [[...]]
+    if trimmed.contains("[[") && trimmed.contains("]]") {
+        return Ok(true);
+    }
+    // Check for markdown links [...](...) — only look for URLs in parentheses
+    if trimmed.contains("http://") || trimmed.contains("https://") || trimmed.contains("ftp://") {
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// Find notes that have no tags and no wiki-links / URLs in their body.
+/// These are effectively "orphaned" — not connected to anything.
+fn find_orphan_notes(conn: &rusqlite::Connection, all_notes: &[NoteMeta]) -> Result<Vec<NoteMeta>> {
+    let mut orphans = Vec::new();
+    for note in all_notes {
+        let has_tags = !note.tags.is_empty();
+        let has_links = body_has_links(conn, &note.id)?;
+        if !has_tags && !has_links {
+            orphans.push(note.clone());
+        }
+    }
+    Ok(orphans)
+}
+
+/// Detect broken wiki-links — `[[target]]` references that do not resolve to
+/// any existing note (#3294). For each broken link, suggests the closest
+/// matching note titles via case-insensitive substring / edit-distance heuristics.
+fn find_broken_links(
+    conn: &rusqlite::Connection,
+    all_notes: &[NoteMeta],
+) -> Result<Vec<BrokenLink>> {
+    use crate::storage::notes::extract_wikilinks;
+
+    // Build a case-insensitive title set for O(1) resolution checks.
+    let mut title_index: HashSet<String> = HashSet::with_capacity(all_notes.len());
+    for note in all_notes {
+        title_index.insert(note.title.to_lowercase());
+    }
+
+    let mut broken: Vec<BrokenLink> = Vec::new();
+    for note in all_notes {
+        // Load the note body from FTS (same as body_has_links uses).
+        let body: String = match conn.query_row(
+            "SELECT body FROM note_fts WHERE note_id = ?1",
+            [&note.id],
+            |row| row.get(0),
+        ) {
+            Ok(b) => b,
+            Err(rusqlite::Error::QueryReturnedNoRows) => continue,
+            Err(e) => {
+                warn!(error = %e, note_id = %note.id, "failed to query note_fts for broken link check");
+                continue;
+            }
+        };
+
+        let raw_links = extract_wikilinks(&body);
+        for (target, _alias) in &raw_links {
+            // Strip section anchors: [[Note Title#section]] → "Note Title"
+            let base_target = target.split('#').next().unwrap_or(target).trim();
+            if base_target.is_empty() {
+                continue;
+            }
+            if title_index.contains(&base_target.to_lowercase()) {
+                continue; // resolved — not broken
+            }
+
+            // Fuzzy match: find note titles that share significant words or
+            // have a small Levenshtein distance to the target.
+            let suggestions = fuzzy_match_titles(base_target, all_notes);
+
+            broken.push(BrokenLink {
+                source_note_id: note.id.clone(),
+                source_note_title: note.title.clone(),
+                link_target: target.clone(),
+                suggested_matches: suggestions,
+            });
+        }
+    }
+
+    // Limit to 200 broken links to keep the report manageable.
+    broken.truncate(200);
+    Ok(broken)
+}
+
+/// Simple fuzzy matching: returns up to 3 note titles that are similar to
+/// `target`. Uses case-insensitive substring match first, then falls back to
+/// a normalised Levenshtein distance.
+fn fuzzy_match_titles(target: &str, all_notes: &[NoteMeta]) -> Vec<String> {
+    let target_lower = target.to_lowercase();
+    let target_words: HashSet<&str> = target_lower
+        .split_whitespace()
+        .filter(|w| w.len() >= 3)
+        .collect();
+
+    // Score each note title.
+    let mut scored: Vec<(usize, &str)> = Vec::new();
+    for note in all_notes {
+        let title_lower = note.title.to_lowercase();
+
+        // Substring match (high score).
+        if title_lower.contains(&target_lower) || target_lower.contains(&title_lower) {
+            scored.push((100, note.title.as_str()));
+            continue;
+        }
+
+        // Word overlap.
+        let title_words: HashSet<&str> = title_lower
+            .split_whitespace()
+            .filter(|w| w.len() >= 3)
+            .collect();
+        let overlap = target_words.intersection(&title_words).count();
+        if overlap > 0 {
+            scored.push((50 + overlap * 10, note.title.as_str()));
+            continue;
+        }
+
+        // Normalised Levenshtein distance (0..100, higher = closer).
+        let dist = levenshtein_distance(&target_lower, &title_lower);
+        let max_len = target_lower.len().max(title_lower.len()).max(1);
+        let similarity = 100 - (dist * 100 / max_len);
+        if similarity >= 60 {
+            scored.push((similarity, note.title.as_str()));
+        }
+    }
+
+    // Sort descending by score, take top 3.
+    scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+    scored
+        .into_iter()
+        .take(3)
+        .map(|(_, title)| title.to_string())
+        .collect()
+}
+
+/// Calculate a knowledge density score (0.0–1.0) based on three factors:
+///
+/// 1. **Tag coverage** (40%): what fraction of notes have at least one tag.
+/// 2. **Link density** (30%): what fraction of notes contain wiki-links/URLs.
+/// 3. **Tag diversity** (30%): how many unique tags per note (capped at 1.0).
+fn calculate_knowledge_density(
+    conn: &rusqlite::Connection,
+    all_notes: &[NoteMeta],
+    total_notes: usize,
+    total_tags: usize,
+) -> Result<f64> {
+    if total_notes == 0 {
+        return Ok(0.0);
+    }
+
+    // Tag coverage
+    let notes_with_tags = all_notes.iter().filter(|n| !n.tags.is_empty()).count();
+    let tag_coverage = notes_with_tags as f64 / all_notes.len() as f64;
+
+    // Link density — check up to 200 notes to avoid excessive queries
+    let sample_size = all_notes.len().min(200);
+    let mut linked_count = 0usize;
+    for note in all_notes.iter().take(sample_size) {
+        if body_has_links(conn, &note.id)? {
+            linked_count += 1;
+        }
+    }
+    let link_density = if sample_size > 0 {
+        linked_count as f64 / sample_size as f64
+    } else {
+        0.0
+    };
+
+    // Tag diversity — unique tags per total notes, capped at 1.0
+    let tag_diversity = (total_tags as f64 / total_notes as f64).min(1.0);
+
+    // Weighted composite
+    let score = tag_coverage * 0.40 + link_density * 0.30 + tag_diversity * 0.30;
+    Ok(score.clamp(0.0, 1.0))
+}
+
+/// Normalize a title for comparison: lowercase, remove non-alphanumeric chars
+/// (except whitespace), collapse whitespace, and trim.
+fn normalize_title(title: &str) -> String {
+    title
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<&str>>()
+        .join(" ")
+        .trim()
+        .to_string()
+}
+
+/// Compute Levenshtein distance between two strings.
+fn levenshtein_distance(a: &str, b: &str) -> usize {
+    let a_chars: Vec<char> = a.chars().collect();
+    let b_chars: Vec<char> = b.chars().collect();
+    let a_len = a_chars.len();
+    let b_len = b_chars.len();
+
+    if a_len == 0 {
+        return b_len;
+    }
+    if b_len == 0 {
+        return a_len;
+    }
+
+    let mut prev_row: Vec<usize> = (0..=b_len).collect();
+    let mut curr_row = vec![0usize; b_len + 1];
+
+    for (i, ca) in a_chars.iter().enumerate() {
+        curr_row[0] = i + 1;
+        for (j, cb) in b_chars.iter().enumerate() {
+            let cost = if ca == cb { 0 } else { 1 };
+            curr_row[j + 1] = (curr_row[j] + 1)
+                .min(prev_row[j + 1] + 1)
+                .min(prev_row[j] + cost);
+        }
+        std::mem::swap(&mut prev_row, &mut curr_row);
+    }
+    prev_row[b_len]
+}
+
+/// Detect groups of notes whose titles are highly similar (exact match after
+/// normalization, or Levenshtein similarity >= 0.8 for short titles).
+fn detect_duplicate_clusters(all_notes: &[NoteMeta]) -> Vec<Vec<String>> {
+    // Phase 1: exact normalized-title matches via hash map
+    let mut title_map: HashMap<String, Vec<String>> = HashMap::new();
+    for note in all_notes {
+        let norm = normalize_title(&note.title);
+        if norm.is_empty() {
+            continue;
+        }
+        title_map.entry(norm).or_default().push(note.id.clone());
+    }
+
+    let mut clusters: Vec<Vec<String>> = Vec::new();
+    let mut visited: HashSet<String> = HashSet::new();
+
+    // Phase 2: collect exact-match groups with >=2 members
+    for ids in title_map.values() {
+        if ids.len() >= 2 {
+            for id in ids {
+                visited.insert(id.clone());
+            }
+            clusters.push(ids.clone());
+        }
+    }
+
+    // Phase 3: fuzzy matching for remaining unvisited notes (short titles)
+    let remaining: Vec<&NoteMeta> = all_notes
+        .iter()
+        .filter(|n| !visited.contains(&n.id))
+        .collect();
+
+    for i in 0..remaining.len() {
+        if visited.contains(&remaining[i].id) {
+            continue;
+        }
+        let norm_i = normalize_title(&remaining[i].title);
+        if norm_i.len() < 3 {
+            continue;
+        }
+        let mut cluster = Vec::new();
+        for j in (i + 1)..remaining.len() {
+            if visited.contains(&remaining[j].id) {
+                continue;
+            }
+            let norm_j = normalize_title(&remaining[j].title);
+            if norm_j.len() < 3 {
+                continue;
+            }
+            let max_len = norm_i.len().max(norm_j.len());
+            let dist = levenshtein_distance(&norm_i, &norm_j);
+            let similarity = 1.0 - (dist as f64 / max_len as f64);
+            if similarity >= 0.80 {
+                if cluster.is_empty() {
+                    cluster.push(remaining[i].id.clone());
+                    visited.insert(remaining[i].id.clone());
+                }
+                cluster.push(remaining[j].id.clone());
+                visited.insert(remaining[j].id.clone());
+            }
+        }
+        if cluster.len() >= 2 {
+            clusters.push(cluster);
+        }
+    }
+
+    clusters
+}
+
+/// Phase 4 (#3349): Detect notes with identical or near-identical body content.
+///
+/// This catches the common case of copy-paste duplicates or AI-generated
+/// variants that have *different titles* but the same body. We normalize
+/// the body (strip markdown, lowercase, collapse whitespace) and hash it;
+/// notes sharing the same hash form a cluster.
+///
+/// Uses `note_fts` to retrieve body text without re-reading files.
+fn detect_content_duplicate_clusters(
+    conn: &rusqlite::Connection,
+    all_notes: &[NoteMeta],
+) -> Result<Vec<Vec<String>>> {
+    // Build a map: content_hash → Vec<note_id>
+    let mut content_map: HashMap<String, Vec<String>> = HashMap::new();
+
+    for note in all_notes {
+        let body: String = match conn.query_row(
+            "SELECT body FROM note_fts WHERE note_id = ?1",
+            [&note.id],
+            |row| row.get::<_, String>(0),
+        ) {
+            Ok(b) => b,
+            Err(rusqlite::Error::QueryReturnedNoRows) => continue,
+            Err(e) => {
+                warn!(error = %e, note_id = %note.id, "failed to query note_fts for content dedup");
+                continue;
+            }
+        };
+        let normalized = normalize_body_for_hash(&body);
+        if normalized.is_empty() {
+            continue;
+        }
+        let hash = simple_hash(&normalized);
+        content_map.entry(hash).or_default().push(note.id.clone());
+    }
+
+    // Only keep groups with >= 2 members
+    Ok(content_map
+        .into_values()
+        .filter(|ids| ids.len() >= 2)
+        .collect())
+}
+
+/// Merge two lists of duplicate clusters, deduplicating note ids.
+/// If a note appears in both a title-based and content-based cluster,
+/// the clusters are unioned (transitive closure via union-find style merge).
+fn merge_duplicate_clusters(
+    title_clusters: Vec<Vec<String>>,
+    content_clusters: Vec<Vec<String>>,
+) -> Vec<Vec<String>> {
+    use std::collections::HashMap as StdMap;
+
+    // Union-Find: note_id → parent
+    let mut parent: StdMap<String, String> = StdMap::new();
+
+    fn find(parent: &mut StdMap<String, String>, id: &str) -> String {
+        let root = parent
+            .entry(id.to_string())
+            .or_insert_with(|| id.to_string())
+            .clone();
+        if root == id {
+            return root;
+        }
+        let new_root = find(parent, &root);
+        parent.insert(id.to_string(), new_root.clone());
+        new_root
+    }
+
+    fn union(parent: &mut StdMap<String, String>, a: &str, b: &str) {
+        let ra = find(parent, a);
+        let rb = find(parent, b);
+        if ra != rb {
+            parent.insert(ra, rb);
+        }
+    }
+
+    for cluster in title_clusters.iter().chain(content_clusters.iter()) {
+        if cluster.len() >= 2 {
+            let first = &cluster[0];
+            for id in &cluster[1..] {
+                union(&mut parent, first, id);
+            }
+        }
+    }
+
+    // Collect groups by root
+    let mut groups: StdMap<String, Vec<String>> = StdMap::new();
+    let all_ids: HashSet<String> = title_clusters
+        .iter()
+        .chain(content_clusters.iter())
+        .flatten()
+        .cloned()
+        .collect();
+    for id in &all_ids {
+        let root = find(&mut parent, id);
+        groups.entry(root).or_default().push(id.clone());
+    }
+
+    let mut result: Vec<Vec<String>> = groups.into_values().filter(|g| g.len() >= 2).collect();
+    // Sort for deterministic output
+    for cluster in &mut result {
+        cluster.sort();
+    }
+    result.sort();
+    result
+}
+
+/// Normalize a note body for content hashing (#3349).
+///
+/// Strips markdown syntax, lowercases, and collapses all whitespace
+/// to single spaces so that cosmetic differences don't prevent dedup.
+fn normalize_body_for_hash(body: &str) -> String {
+    // Strip markdown headers, emphasis, code fences, links
+    let stripped = body
+        .replace("```", "")
+        .replace(['#', '*', '_', '`', '~', '>'], " ")
+        .replace("[[", "")
+        .replace("]]", "")
+        .replace(['[', ']', '(', ')'], " ")
+        .replace("---", " ");
+    // Lowercase and collapse whitespace
+    let lower = stripped.to_lowercase();
+    lower
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string()
+}
+
+/// Simple non-cryptographic hash for content dedup grouping.
+/// Uses the std DefaultHasher — fast and sufficient for in-process grouping.
+fn simple_hash(s: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    s.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// Normalize a tag for clustering comparison: strips leading `#`, lowercases,
+/// and replaces all non-alphanumeric characters (hyphens, underscores, spaces)
+/// with a single space. The trailing `s` is stripped for singular/plural matching.
+///
+/// Returns `(cased_key, case_insensitive_key, separator_normalized_key, singularized_key)`
+/// where each successive key is more aggressively normalized.
+fn tag_keys(tag: &str) -> (String, String, String, String) {
+    let stripped = tag.trim_start_matches('#').trim().to_string();
+
+    // Key 0: original (with case preserved) — used for case-collision detection.
+    let cased = stripped.clone();
+
+    // Key 1: case-insensitive — groups #AI, #ai, #Ai.
+    let case_insensitive = stripped.to_lowercase();
+
+    // Key 2: separator-normalized — replace -, _, and whitespace with single space.
+    let separator_normalized: String = case_insensitive
+        .chars()
+        .map(|c| {
+            if c == '-' || c == '_' || c.is_whitespace() {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<&str>>()
+        .join(" ");
+
+    // Key 3: singularized — strip trailing 's' for basic plural detection.
+    // Only strip if the word is long enough (> 3 chars after stripping) to
+    // avoid false positives like "is", "as", "us".
+    let singularized = if separator_normalized.len() > 4
+        && separator_normalized.ends_with('s')
+        && !separator_normalized.ends_with("ss")
+    {
+        separator_normalized[..separator_normalized.len() - 1].to_string()
+    } else {
+        separator_normalized.clone()
+    };
+
+    (cased, case_insensitive, separator_normalized, singularized)
+}
+
+/// Detect clusters of tags that are likely surface variants of the same concept.
+///
+/// Phase 1 (deterministic, no AI required):
+/// - **Case**: `#AI` ≡ `#ai` ≡ `#Ai` (same chars, different casing)
+/// - **Separator**: `#to-do` ≡ `#to_do` ≡ `#to do` (same words, different separators)
+/// - **Plural**: `#meeting` ≡ `#meetings` (singular/plural pair)
+///
+/// Each cluster is assigned the most frequently used variant as the canonical tag.
+/// A single tag never appears in more than one cluster (priority: case > separator > plural).
+fn detect_tag_clusters(all_notes: &[NoteMeta]) -> Vec<TagCluster> {
+    // Count how many notes use each tag variant.
+    let mut tag_counts: HashMap<String, usize> = HashMap::new();
+    for note in all_notes {
+        for tag in &note.tags {
+            *tag_counts.entry(tag.clone()).or_default() += 1;
+        }
+    }
+
+    if tag_counts.len() < 2 {
+        return Vec::new();
+    }
+
+    // Build key → set of original tags for each normalization level.
+    // We process from most-aggressive to least so a tag is only claimed once.
+    let mut assigned: HashSet<String> = HashSet::new();
+    let mut clusters: Vec<TagCluster> = Vec::new();
+
+    // Helper to build a cluster from a set of tag strings.
+    let build_cluster = |tags: &[String], reason: TagMergeReason| -> Option<TagCluster> {
+        if tags.len() < 2 {
+            return None;
+        }
+        let mut variants: Vec<TagVariant> = tags
+            .iter()
+            .map(|t| TagVariant {
+                tag: t.clone(),
+                note_count: *tag_counts.get(t).unwrap_or(&0),
+            })
+            .collect();
+        // Sort by note_count desc so the most-used variant becomes canonical.
+        // Tie-break: shortest original tag (cleaner canonical).
+        variants.sort_by(|a, b| {
+            b.note_count
+                .cmp(&a.note_count)
+                .then_with(|| a.tag.len().cmp(&b.tag.len()))
+        });
+
+        let canonical = variants[0].tag.clone();
+        // Count unique notes that have at least one of the cluster's variant tags.
+        // This avoids double-counting notes that carry multiple variant tags in
+        // the same cluster (e.g. a note tagged both #ai and #AI).
+        let cluster_tags: HashSet<&str> = tags.iter().map(|s| s.as_str()).collect();
+        let total_notes: usize = all_notes
+            .iter()
+            .filter(|note| note.tags.iter().any(|t| cluster_tags.contains(t.as_str())))
+            .count();
+        Some(TagCluster {
+            canonical_tag: canonical,
+            variants,
+            total_notes,
+            confidence: 1.0,
+            reason,
+        })
+    };
+
+    // --- Pass 1: Case-sensitive (most specific — same word, different casing) ---
+    // Group by case-insensitive key. Tags that differ ONLY in casing will
+    // share a case-insensitive key but have distinct cased keys.
+    let mut case_map: HashMap<String, Vec<String>> = HashMap::new();
+    for tag in tag_counts.keys() {
+        let (_, case_key, _, _) = tag_keys(tag);
+        case_map.entry(case_key).or_default().push(tag.clone());
+    }
+    for group in case_map.values() {
+        let unassigned: Vec<String> = group
+            .iter()
+            .filter(|t| !assigned.contains(*t))
+            .cloned()
+            .collect();
+        if let Some(cluster) = build_cluster(&unassigned, TagMergeReason::CaseSensitive) {
+            for v in &cluster.variants {
+                assigned.insert(v.tag.clone());
+            }
+            clusters.push(cluster);
+        }
+    }
+
+    // --- Pass 2: Separator (hyphen/underscore/space) ---
+    // For unassigned tags, group by separator-normalized key. Tags that
+    // differ only in word-separator style will share a sep key but have
+    // distinct case-insensitive keys (which preserve separators).
+    let mut sep_map: HashMap<String, Vec<String>> = HashMap::new();
+    for tag in tag_counts.keys() {
+        if assigned.contains(tag) {
+            continue;
+        }
+        let (_, _, sep, _) = tag_keys(tag);
+        sep_map.entry(sep).or_default().push(tag.clone());
+    }
+    for group in sep_map.values() {
+        let unassigned: Vec<String> = group
+            .iter()
+            .filter(|t| !assigned.contains(*t))
+            .cloned()
+            .collect();
+        if let Some(cluster) = build_cluster(&unassigned, TagMergeReason::Separator) {
+            for v in &cluster.variants {
+                assigned.insert(v.tag.clone());
+            }
+            clusters.push(cluster);
+        }
+    }
+
+    // --- Pass 3: Plural (singular/plural pairs) ---
+    // For unassigned tags, group by singularized key. Only create a cluster
+    // if there are ≥ 2 distinct separator-normalized forms — this ensures
+    // we only group tags that actually differ in plural/singular form.
+    let mut singular_map: HashMap<String, Vec<String>> = HashMap::new();
+    for tag in tag_counts.keys() {
+        if assigned.contains(tag) {
+            continue;
+        }
+        let (_, _, _, singular) = tag_keys(tag);
+        singular_map.entry(singular).or_default().push(tag.clone());
+    }
+    for group in singular_map.values() {
+        // Only group if there are at least 2 distinct separator-normalized forms
+        // — e.g. "meeting" and "meetings" both singularize to "meeting" but
+        // "react" and "react-native" don't.
+        let sep_keys: HashSet<String> = group.iter().map(|t| tag_keys(t).2).collect();
+        if sep_keys.len() < 2 {
+            continue;
+        }
+        let unassigned: Vec<String> = group
+            .iter()
+            .filter(|t| !assigned.contains(*t))
+            .cloned()
+            .collect();
+        if let Some(cluster) = build_cluster(&unassigned, TagMergeReason::Plural) {
+            for v in &cluster.variants {
+                assigned.insert(v.tag.clone());
+            }
+            clusters.push(cluster);
+        }
+    }
+
+    // Sort clusters by total_notes descending (biggest impact first).
+    clusters.sort_by_key(|c| std::cmp::Reverse(c.total_notes));
+
+    // Limit to 100 clusters to keep the report manageable.
+    clusters.truncate(100);
+    clusters
+}
+
+/// Generate human-readable suggestions based on analysis results.
+fn generate_suggestions(
+    all_notes: &[NoteMeta],
+    orphan_notes: &[NoteMeta],
+    duplicate_clusters: &[Vec<String>],
+    collections: &[Collection],
+    broken_links: &[BrokenLink],
+    tag_clusters: &[TagCluster],
+) -> Vec<String> {
+    let mut suggestions = Vec::new();
+
+    // ── Orphan notes ──────────────────────────────────────────────────
+    if !orphan_notes.is_empty() {
+        let sample: Vec<&str> = orphan_notes
+            .iter()
+            .take(3)
+            .map(|n| n.title.as_str())
+            .collect();
+        if orphan_notes.len() == 1 {
+            suggestions.push(format!(
+                "You have 1 orphan note '{}', consider adding tags or links to integrate it into your knowledge graph.",
+                sample[0]
+            ));
+        } else {
+            suggestions.push(format!(
+                "You have {} orphan notes (e.g. '{}'), consider adding tags or links to integrate them into your knowledge graph.",
+                orphan_notes.len(),
+                sample.join("', '")
+            ));
+        }
+    }
+
+    // ── Sparse collections ────────────────────────────────────────────
+    for col in collections {
+        if col.note_count <= 2 && col.note_count > 0 {
+            suggestions.push(format!(
+                "Your '{}' collection only has {} notes, consider adding more related notes.",
+                col.name, col.note_count
+            ));
+        }
+    }
+
+    // ── Duplicate clusters ────────────────────────────────────────────
+    if !duplicate_clusters.is_empty() {
+        let total_dupes: usize = duplicate_clusters.iter().map(|c| c.len()).sum();
+        suggestions.push(format!(
+            "Detected {} groups of highly similar notes ({} notes total), consider merging them to reduce redundancy.",
+            duplicate_clusters.len(),
+            total_dupes
+        ));
+    }
+
+    // ── Broken links (#3294) ──────────────────────────────────────────
+    if !broken_links.is_empty() {
+        let sample: Vec<&str> = broken_links
+            .iter()
+            .take(3)
+            .map(|bl| bl.link_target.as_str())
+            .collect();
+        if broken_links.len() == 1 {
+            suggestions.push(format!(
+                "Found 1 broken wiki-link '{}' that points to a non-existent note. Rename or create the target note to fix it.",
+                sample[0]
+            ));
+        } else {
+            suggestions.push(format!(
+                "Found {} broken wiki-links (e.g. '{}') pointing to non-existent notes. Review and fix them to keep your knowledge graph navigable.",
+                broken_links.len(),
+                sample.join("', '")
+            ));
+        }
+    }
+
+    // ── Tag sprawl (#3295) ────────────────────────────────────────────
+    if !tag_clusters.is_empty() {
+        let affected: usize = tag_clusters.iter().map(|c| c.total_notes).sum();
+        suggestions.push(format!(
+            "Detected {} tag clusters with {} notes across likely duplicate tags. Merging them will improve search and graph consistency.",
+            tag_clusters.len(),
+            affected
+        ));
+    }
+
+    // ── Untagged notes (excluding orphans already reported) ───────────
+    let orphan_ids: HashSet<&str> = orphan_notes.iter().map(|n| n.id.as_str()).collect();
+    let untagged_non_orphan = all_notes
+        .iter()
+        .filter(|n| n.tags.is_empty() && !orphan_ids.contains(n.id.as_str()))
+        .count();
+    if untagged_non_orphan > 0 {
+        suggestions.push(format!(
+            "You have {} untagged notes with links, consider adding descriptive tags for better categorization.",
+            untagged_non_orphan
+        ));
+    }
+
+    // ── Overall density feedback ──────────────────────────────────────
+    if all_notes.len() >= 5 {
+        let linked_count = all_notes.iter().filter(|n| !n.tags.is_empty()).count();
+        let ratio = linked_count as f64 / all_notes.len() as f64;
+        if ratio < 0.3 && all_notes.len() > 10 {
+            suggestions.push(
+                "Less than 30% of your notes have tags. Adding tags improves search and RAG retrieval quality.".to_string(),
+            );
+        }
+    }
+
+    suggestions
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::{params, Connection};
+
+    #[test]
+    fn normalize_title_removes_punctuation_and_lowercases() {
+        assert_eq!(normalize_title("Hello World!"), "hello world");
+        assert_eq!(normalize_title("Rust 🦀 Guide"), "rust guide");
+        assert_eq!(normalize_title(""), "");
+    }
+
+    #[test]
+    fn levenshtein_identical_strings() {
+        assert_eq!(levenshtein_distance("hello", "hello"), 0);
+    }
+
+    #[test]
+    fn levenshtein_completely_different() {
+        assert_eq!(levenshtein_distance("abc", "xyz"), 3);
+    }
+
+    #[test]
+    fn levenshtein_empty_strings() {
+        assert_eq!(levenshtein_distance("", ""), 0);
+        assert_eq!(levenshtein_distance("abc", ""), 3);
+        assert_eq!(levenshtein_distance("", "xyz"), 3);
+    }
+
+    #[test]
+    fn detect_duplicate_clusters_finds_exact_matches() {
+        let notes = vec![
+            NoteMeta {
+                id: "a".into(),
+                title: "Getting Started with Rust".into(),
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "b".into(),
+                title: "Getting Started with Rust".into(),
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "c".into(),
+                title: "Different Title".into(),
+                ..Default::default()
+            },
+        ];
+        let clusters = detect_duplicate_clusters(&notes);
+        assert_eq!(clusters.len(), 1);
+        assert!(clusters[0].contains(&"a".to_string()));
+        assert!(clusters[0].contains(&"b".to_string()));
+    }
+
+    #[test]
+    fn detect_duplicate_clusters_no_false_positive() {
+        let notes = vec![
+            NoteMeta {
+                id: "a".into(),
+                title: "Alpha".into(),
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "b".into(),
+                title: "Beta".into(),
+                ..Default::default()
+            },
+        ];
+        let clusters = detect_duplicate_clusters(&notes);
+        assert!(clusters.is_empty());
+    }
+
+    #[test]
+    fn generate_suggestions_empty_when_healthy() {
+        let notes = vec![NoteMeta {
+            id: "x".into(),
+            title: "Test".into(),
+            tags: vec!["tag".into()],
+            ..Default::default()
+        }];
+        let suggestions = generate_suggestions(&notes, &[], &[], &[], &[], &[]);
+        // No orphans, no duplicates, no empty collections → no suggestions
+        // (But there may be density feedback — depends on the note count)
+        assert!(suggestions.is_empty());
+    }
+
+    #[test]
+    fn generate_suggestions_orphans() {
+        let notes = vec![
+            NoteMeta {
+                id: "o1".into(),
+                title: "Orphan One".into(),
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "o2".into(),
+                title: "Orphan Two".into(),
+                ..Default::default()
+            },
+        ];
+        let suggestions = generate_suggestions(&notes, &notes, &[], &[], &[], &[]);
+        assert!(suggestions.iter().any(|s| s.contains("orphan")));
+    }
+
+    #[test]
+    fn generate_suggestions_duplicates() {
+        let clusters = vec![vec!["a".into(), "b".into()]];
+        let suggestions = generate_suggestions(&[], &[], &clusters, &[], &[], &[]);
+        assert!(suggestions.iter().any(|s| s.contains("highly similar")));
+    }
+
+    #[test]
+    fn generate_suggestions_sparse_collections() {
+        let collections = vec![Collection {
+            name: "Project X".into(),
+            note_count: 1,
+            ..Default::default()
+        }];
+        let suggestions = generate_suggestions(&[], &[], &[], &collections, &[], &[]);
+        assert!(
+            suggestions.iter().any(|s| s.contains("Project X")),
+            "should mention the collection name"
+        );
+    }
+
+    #[test]
+    fn knowledge_density_zero_when_no_notes() {
+        let score = calculate_knowledge_density_direct(0, 0);
+        assert_eq!(score, 0.0);
+    }
+
+    #[test]
+    fn knowledge_density_max_when_perfect() {
+        let score = calculate_knowledge_density_direct(100, 100);
+        // With perfect everything: tag_coverage=1.0, link_density=1.0, tag_diversity=1.0
+        // score = 0.4*1.0 + 0.3*1.0 + 0.3*1.0 = 1.0
+        assert!((score - 1.0).abs() < 0.001);
+    }
+
+    /// Helper to test knowledge density without a DB connection.
+    /// Assumes tag_coverage=1.0, link_density=1.0 (every note has tags and links).
+    fn calculate_knowledge_density_direct(total_notes: usize, total_tags: usize) -> f64 {
+        if total_notes == 0 {
+            return 0.0;
+        }
+        let tag_coverage = 1.0; // all notes have tags
+        let link_density = 1.0; // all notes have links
+        let tag_diversity = (total_tags as f64 / total_notes as f64).min(1.0);
+        tag_coverage * 0.40 + link_density * 0.30 + tag_diversity * 0.30
+    }
+
+    #[test]
+    fn load_all_note_metas_invalid_json_returns_empty_tags() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS notes (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                tags TEXT NOT NULL,
+                keywords TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                board TEXT NOT NULL,
+                kernel TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                source TEXT NOT NULL,
+                path TEXT NOT NULL UNIQUE,
+                summary TEXT NOT NULL,
+                body_hash TEXT NOT NULL,
+                semantic_vector TEXT NOT NULL DEFAULT ''
+            );",
+        )
+        .unwrap();
+
+        // Invalid JSON in tags
+        conn.execute(
+            "INSERT INTO notes
+             (id, title, tags, keywords, platform, board, kernel,
+              status, created_at, updated_at, source, path, summary, body_hash, semantic_vector)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![
+                "n1",
+                "Bad Tags",
+                "{invalid",
+                "[]",
+                "test",
+                "test",
+                "test",
+                "active",
+                "2026-01-01",
+                "2026-01-01",
+                "test",
+                "/bad-tags.md",
+                "",
+                "",
+                ""
+            ],
+        )
+        .unwrap();
+
+        // Invalid JSON in keywords
+        conn.execute(
+            "INSERT INTO notes
+             (id, title, tags, keywords, platform, board, kernel,
+              status, created_at, updated_at, source, path, summary, body_hash, semantic_vector)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![
+                "n2",
+                "Bad Keywords",
+                "[]",
+                "not-json!!!",
+                "test",
+                "test",
+                "test",
+                "active",
+                "2026-01-01",
+                "2026-01-01",
+                "test",
+                "/bad-keywords.md",
+                "",
+                "",
+                ""
+            ],
+        )
+        .unwrap();
+
+        // Both valid
+        conn.execute(
+            "INSERT INTO notes
+             (id, title, tags, keywords, platform, board, kernel,
+              status, created_at, updated_at, source, path, summary, body_hash, semantic_vector)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![
+                "n3",
+                "Good Note",
+                "[\"rust\"]",
+                "[\"dev\"]",
+                "test",
+                "test",
+                "test",
+                "active",
+                "2026-01-01",
+                "2026-01-01",
+                "test",
+                "/good.md",
+                "",
+                "",
+                ""
+            ],
+        )
+        .unwrap();
+
+        let metas = load_all_note_metas(&conn, 10).unwrap();
+
+        // n1: invalid tags → empty tags
+        let n1 = metas.iter().find(|m| m.id == "n1").unwrap();
+        assert!(
+            n1.tags.is_empty(),
+            "invalid tags JSON should yield empty tags vec, got {:?}",
+            n1.tags
+        );
+
+        // n2: invalid keywords → empty keywords
+        let n2 = metas.iter().find(|m| m.id == "n2").unwrap();
+        assert!(
+            n2.keywords.is_empty(),
+            "invalid keywords JSON should yield empty keywords vec, got {:?}",
+            n2.keywords
+        );
+
+        // n3: valid JSON preserved
+        let n3 = metas.iter().find(|m| m.id == "n3").unwrap();
+        assert_eq!(n3.tags, vec!["rust"]);
+        assert_eq!(n3.keywords, vec!["dev"]);
+    }
+
+    #[test]
+    fn body_has_links_no_fts_table_returns_error_2714() {
+        // Regression for #2714: querying a non-existent note_fts table must NOT
+        // silently return Ok(false). It should return an Err so the caller knows
+        // something is wrong with the database schema.
+        let conn = Connection::open_in_memory().unwrap();
+        // No note_fts table created — query should error, not be swallowed as false
+        let result = body_has_links(&conn, "n1");
+        assert!(
+            result.is_err(),
+            "body_has_links must propagate DB errors, not silently return false (#2714)"
+        );
+    }
+
+    #[test]
+    fn body_has_links_no_row_returns_false_2714() {
+        // Regression for #2714: when the note exists in the DB but has no FTS
+        // entry (QueryReturnedNoRows), that's a legitimate "no links" result.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE note_fts (
+                note_id TEXT PRIMARY KEY,
+                body TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+
+        // No rows — should be Ok(false), not an error
+        assert!(
+            !body_has_links(&conn, "nonexistent").unwrap(),
+            "QueryReturnedNoRows should yield Ok(false), not an error"
+        );
+    }
+
+    #[test]
+    fn body_has_links_detects_wiki_links_2714() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE note_fts (
+                note_id TEXT PRIMARY KEY,
+                body TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO note_fts (note_id, body) VALUES (?1, ?2)",
+            params!["n1", "See [[other-note]] for details"],
+        )
+        .unwrap();
+        assert!(body_has_links(&conn, "n1").unwrap());
+    }
+
+    #[test]
+    fn body_has_links_detects_urls_2714() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE note_fts (
+                note_id TEXT PRIMARY KEY,
+                body TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO note_fts (note_id, body) VALUES (?1, ?2)",
+            params!["n2", "Check https://example.com"],
+        )
+        .unwrap();
+        assert!(body_has_links(&conn, "n2").unwrap());
+    }
+
+    #[test]
+    fn body_has_links_plain_text_no_links_2714() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE note_fts (
+                note_id TEXT PRIMARY KEY,
+                body TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO note_fts (note_id, body) VALUES (?1, ?2)",
+            params!["n3", "Just plain text with no links at all"],
+        )
+        .unwrap();
+        assert!(!body_has_links(&conn, "n3").unwrap());
+    }
+
+    #[test]
+    fn body_has_links_empty_body_2714() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE note_fts (
+                note_id TEXT PRIMARY KEY,
+                body TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO note_fts (note_id, body) VALUES (?1, ?2)",
+            params!["n4", "   "],
+        )
+        .unwrap();
+        assert!(!body_has_links(&conn, "n4").unwrap());
+    }
+
+    /// #3294: find_broken_links detects wiki-links to non-existent notes.
+    #[test]
+    fn find_broken_links_detects_dangling_wikilinks() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE notes (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                tags TEXT NOT NULL DEFAULT '[]',
+                keywords TEXT NOT NULL DEFAULT '[]',
+                platform TEXT NOT NULL DEFAULT '',
+                board TEXT NOT NULL DEFAULT '',
+                kernel TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT '',
+                path TEXT NOT NULL DEFAULT '',
+                summary TEXT NOT NULL DEFAULT '',
+                body_hash TEXT NOT NULL DEFAULT '',
+                semantic_vector TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE note_fts (
+                note_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT '',
+                keywords TEXT NOT NULL DEFAULT '',
+                body TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+
+        // Note A links to Note B (exists) and Note C (does NOT exist).
+        conn.execute("INSERT INTO notes (id, title) VALUES ('a', 'Note A')", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO note_fts (note_id, body) VALUES ('a', 'See [[Note B]] and [[Note C]] for details.')",
+            [],
+        )
+        .unwrap();
+
+        // Note B exists and has no links.
+        conn.execute("INSERT INTO notes (id, title) VALUES ('b', 'Note B')", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO note_fts (note_id, body) VALUES ('b', 'This is Note B.')",
+            [],
+        )
+        .unwrap();
+
+        let all_notes = vec![
+            NoteMeta {
+                id: "a".into(),
+                title: "Note A".into(),
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "b".into(),
+                title: "Note B".into(),
+                ..Default::default()
+            },
+        ];
+
+        let broken = find_broken_links(&conn, &all_notes).unwrap();
+        assert_eq!(broken.len(), 1, "should detect exactly 1 broken link");
+        assert_eq!(broken[0].link_target, "Note C");
+        assert_eq!(broken[0].source_note_id, "a");
+        assert_eq!(broken[0].source_note_title, "Note A");
+        // Note B should be suggested as a fuzzy match for "Note C".
+        assert!(
+            broken[0].suggested_matches.contains(&"Note B".to_string()),
+            "should suggest 'Note B' as a similar title"
+        );
+    }
+
+    /// #3294: resolved wiki-links are not flagged as broken.
+    #[test]
+    fn find_broken_links_skips_resolved_links() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE notes (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                tags TEXT NOT NULL DEFAULT '[]',
+                keywords TEXT NOT NULL DEFAULT '[]',
+                platform TEXT NOT NULL DEFAULT '',
+                board TEXT NOT NULL DEFAULT '',
+                kernel TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT '',
+                path TEXT NOT NULL DEFAULT '',
+                summary TEXT NOT NULL DEFAULT '',
+                body_hash TEXT NOT NULL DEFAULT '',
+                semantic_vector TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE note_fts (
+                note_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT '',
+                keywords TEXT NOT NULL DEFAULT '',
+                body TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+
+        conn.execute("INSERT INTO notes (id, title) VALUES ('a', 'Alpha')", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO note_fts (note_id, body) VALUES ('a', 'Link to [[Beta]] and [[Gamma#section]]')",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO notes (id, title) VALUES ('b', 'Beta')", [])
+            .unwrap();
+        conn.execute("INSERT INTO note_fts (note_id, body) VALUES ('b', '')", [])
+            .unwrap();
+        conn.execute("INSERT INTO notes (id, title) VALUES ('c', 'Gamma')", [])
+            .unwrap();
+        conn.execute("INSERT INTO note_fts (note_id, body) VALUES ('c', '')", [])
+            .unwrap();
+
+        let all_notes = vec![
+            NoteMeta {
+                id: "a".into(),
+                title: "Alpha".into(),
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "b".into(),
+                title: "Beta".into(),
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "c".into(),
+                title: "Gamma".into(),
+                ..Default::default()
+            },
+        ];
+
+        let broken = find_broken_links(&conn, &all_notes).unwrap();
+        assert!(broken.is_empty(), "all links resolve — no broken links");
+    }
+
+    /// #3294: generate_suggestions includes broken link feedback.
+    #[test]
+    fn generate_suggestions_includes_broken_links() {
+        let broken = vec![BrokenLink {
+            source_note_id: "a".into(),
+            source_note_title: "Note A".into(),
+            link_target: "Missing Note".into(),
+            suggested_matches: vec![],
+        }];
+        let suggestions = generate_suggestions(&[], &[], &[], &[], &broken, &[]);
+        assert!(
+            suggestions
+                .iter()
+                .any(|s| s.contains("broken wiki-link") && s.contains("Missing Note")),
+            "should mention broken link in suggestions"
+        );
+    }
+
+    // ── Tag Sprawl Detector tests (#3295) ─────────────────────────────
+
+    #[test]
+    fn tag_keys_strips_hash_and_lowercases() {
+        let (cased, ci, sep, sing) = tag_keys("#AI");
+        assert_eq!(cased, "AI");
+        assert_eq!(ci, "ai");
+        assert_eq!(sep, "ai");
+        assert_eq!(sing, "ai");
+    }
+
+    #[test]
+    fn tag_keys_normalizes_separators() {
+        let (_, _, sep, _) = tag_keys("to-do");
+        assert_eq!(sep, "to do");
+        let (_, _, sep, _) = tag_keys("to_do");
+        assert_eq!(sep, "to do");
+        let (_, _, sep, _) = tag_keys("to do");
+        assert_eq!(sep, "to do");
+    }
+
+    #[test]
+    fn tag_keys_singularizes_plural() {
+        let (_, _, _, sing) = tag_keys("meetings");
+        assert_eq!(sing, "meeting");
+        let (_, _, _, sing) = tag_keys("meeting");
+        assert_eq!(sing, "meeting");
+    }
+
+    #[test]
+    fn tag_keys_does_not_singularize_short_words() {
+        let (_, _, _, sing) = tag_keys("is");
+        assert_eq!(sing, "is");
+        let (_, _, _, sing) = tag_keys("as");
+        assert_eq!(sing, "as");
+    }
+
+    #[test]
+    fn tag_keys_does_not_singularize_double_s() {
+        let (_, _, _, sing) = tag_keys("process");
+        assert_eq!(sing, "process");
+        let (_, _, _, sing) = tag_keys("class");
+        assert_eq!(sing, "class");
+    }
+
+    #[test]
+    fn detect_tag_clusters_case_sensitive() {
+        let notes = vec![
+            NoteMeta {
+                id: "n1".into(),
+                title: "Note 1".into(),
+                tags: vec!["AI".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n2".into(),
+                title: "Note 2".into(),
+                tags: vec!["ai".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n3".into(),
+                title: "Note 3".into(),
+                tags: vec!["Ai".into()],
+                ..Default::default()
+            },
+        ];
+        let clusters = detect_tag_clusters(&notes);
+        assert_eq!(clusters.len(), 1, "should find 1 case cluster");
+        assert_eq!(clusters[0].variants.len(), 3);
+        assert_eq!(
+            clusters[0].reason,
+            TagMergeReason::CaseSensitive,
+            "should be case-sensitive reason"
+        );
+    }
+
+    #[test]
+    fn detect_tag_clusters_separator_variants() {
+        let notes = vec![
+            NoteMeta {
+                id: "n1".into(),
+                title: "Note 1".into(),
+                tags: vec!["to-do".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n2".into(),
+                title: "Note 2".into(),
+                tags: vec!["to_do".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n3".into(),
+                title: "Note 3".into(),
+                tags: vec!["to do".into()],
+                ..Default::default()
+            },
+        ];
+        let clusters = detect_tag_clusters(&notes);
+        assert_eq!(clusters.len(), 1, "should find 1 separator cluster");
+        assert_eq!(clusters[0].variants.len(), 3);
+        assert_eq!(
+            clusters[0].reason,
+            TagMergeReason::Separator,
+            "should be separator reason"
+        );
+    }
+
+    #[test]
+    fn detect_tag_clusters_plural() {
+        let notes = vec![
+            NoteMeta {
+                id: "n1".into(),
+                title: "Note 1".into(),
+                tags: vec!["meeting".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n2".into(),
+                title: "Note 2".into(),
+                tags: vec!["meetings".into()],
+                ..Default::default()
+            },
+        ];
+        let clusters = detect_tag_clusters(&notes);
+        assert_eq!(clusters.len(), 1, "should find 1 plural cluster");
+        assert_eq!(clusters[0].variants.len(), 2);
+        assert_eq!(
+            clusters[0].reason,
+            TagMergeReason::Plural,
+            "should be plural reason"
+        );
+    }
+
+    #[test]
+    fn detect_tag_clusters_no_false_positives() {
+        let notes = vec![
+            NoteMeta {
+                id: "n1".into(),
+                title: "Note 1".into(),
+                tags: vec!["rust".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n2".into(),
+                title: "Note 2".into(),
+                tags: vec!["python".into()],
+                ..Default::default()
+            },
+        ];
+        let clusters = detect_tag_clusters(&notes);
+        assert!(clusters.is_empty(), "distinct tags should not cluster");
+    }
+
+    #[test]
+    fn detect_tag_clusters_canonical_is_most_used() {
+        // "ai" appears in 3 notes, "AI" in 1 → canonical should be "ai"
+        let notes = vec![
+            NoteMeta {
+                id: "n1".into(),
+                title: "N1".into(),
+                tags: vec!["ai".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n2".into(),
+                title: "N2".into(),
+                tags: vec!["ai".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n3".into(),
+                title: "N3".into(),
+                tags: vec!["ai".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n4".into(),
+                title: "N4".into(),
+                tags: vec!["AI".into()],
+                ..Default::default()
+            },
+        ];
+        let clusters = detect_tag_clusters(&notes);
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(
+            clusters[0].canonical_tag, "ai",
+            "most-used variant should be canonical"
+        );
+        assert_eq!(clusters[0].total_notes, 4);
+    }
+
+    #[test]
+    fn detect_tag_clusters_empty_when_no_tags() {
+        let notes = vec![NoteMeta {
+            id: "n1".into(),
+            title: "N1".into(),
+            ..Default::default()
+        }];
+        let clusters = detect_tag_clusters(&notes);
+        assert!(clusters.is_empty());
+    }
+
+    #[test]
+    fn detect_tag_clusters_multiple_clusters() {
+        let notes = vec![
+            NoteMeta {
+                id: "n1".into(),
+                title: "N1".into(),
+                tags: vec!["AI".into(), "to-do".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n2".into(),
+                title: "N2".into(),
+                tags: vec!["ai".into(), "to_do".into()],
+                ..Default::default()
+            },
+        ];
+        let clusters = detect_tag_clusters(&notes);
+        assert_eq!(clusters.len(), 2, "should find case + separator clusters");
+    }
+
+    #[test]
+    fn detect_tag_clusters_total_notes_no_double_count() {
+        // Regression for #3314: a note with multiple variant tags in the same
+        // cluster should NOT inflate total_notes beyond the unique note count.
+        //
+        // N1 has BOTH "ai" and "AI" → before the fix, total_notes = 4 (3+1),
+        // but the correct unique count is 3.
+        let notes = vec![
+            NoteMeta {
+                id: "n1".into(),
+                title: "N1".into(),
+                tags: vec!["ai".into(), "AI".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n2".into(),
+                title: "N2".into(),
+                tags: vec!["ai".into()],
+                ..Default::default()
+            },
+            NoteMeta {
+                id: "n3".into(),
+                title: "N3".into(),
+                tags: vec!["ai".into()],
+                ..Default::default()
+            },
+        ];
+        let clusters = detect_tag_clusters(&notes);
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(
+            clusters[0].variants.len(),
+            2,
+            "should merge ai + AI into one cluster"
+        );
+        // tag_counts: {"ai": 3, "AI": 1} → old sum = 4, but only 3 unique notes
+        assert_eq!(
+            clusters[0].total_notes, 3,
+            "total_notes must be unique notes, not sum of per-variant counts"
+        );
+    }
+
+    #[test]
+    fn generate_suggestions_includes_tag_clusters() {
+        let clusters = vec![TagCluster {
+            canonical_tag: "ai".into(),
+            variants: vec![
+                TagVariant {
+                    tag: "ai".into(),
+                    note_count: 5,
+                },
+                TagVariant {
+                    tag: "AI".into(),
+                    note_count: 2,
+                },
+            ],
+            total_notes: 7,
+            confidence: 1.0,
+            reason: TagMergeReason::CaseSensitive,
+        }];
+        let suggestions = generate_suggestions(&[], &[], &[], &[], &[], &clusters);
+        assert!(
+            suggestions
+                .iter()
+                .any(|s| s.contains("tag clusters") && s.contains("7 notes")),
+            "should mention tag clusters and affected note count"
+        );
+    }
+
+    // ── #3349: Content-based duplicate detection tests ──────────────────
+
+    /// Helper: create an in-memory DB with note_fts for content dedup tests
+    fn setup_content_dedup_db(notes: &[(&str, &str, &str)]) -> Connection {
+        // notes: Vec of (id, title, body)
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE notes (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                tags TEXT NOT NULL,
+                keywords TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                board TEXT NOT NULL,
+                kernel TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                source TEXT NOT NULL,
+                path TEXT NOT NULL UNIQUE,
+                summary TEXT NOT NULL,
+                body_hash TEXT NOT NULL,
+                semantic_vector TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE note_fts (
+                note_id TEXT PRIMARY KEY,
+                body TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        for (i, (id, title, body)) in notes.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO notes (id, title, tags, keywords, platform, board, kernel,
+                 status, created_at, updated_at, source, path, summary, body_hash, semantic_vector)
+                 VALUES (?1, ?2, '[]', '[]', '', '', '', '', '', '', '', ?3, '', '', '')",
+                params![id, title, format!("/note{i}.md")],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO note_fts (note_id, body) VALUES (?1, ?2)",
+                params![id, body],
+            )
+            .unwrap();
+        }
+        conn
+    }
+
+    #[test]
+    fn detect_content_duplicates_finds_identical_bodies_3349() {
+        let conn = setup_content_dedup_db(&[
+            ("a", "Rust Guide", "# Rust\n\nLearn Rust basics"),
+            ("b", "Different Title", "# Rust\n\nLearn Rust basics"),
+            (
+                "c",
+                "Unique Note",
+                "# Unique\n\nCompletely different content",
+            ),
+        ]);
+        let all_notes = load_all_note_metas(&conn, 10).unwrap();
+        let clusters = detect_content_duplicate_clusters(&conn, &all_notes).unwrap();
+        assert_eq!(
+            clusters.len(),
+            1,
+            "should find exactly 1 content-dup cluster"
+        );
+        assert_eq!(clusters[0].len(), 2, "cluster should have 2 notes");
+        // Both a and b should be in the cluster despite different titles
+        assert!(clusters[0].contains(&"a".to_string()));
+        assert!(clusters[0].contains(&"b".to_string()));
+    }
+
+    #[test]
+    fn detect_content_duplicates_normalizes_whitespace_3349() {
+        // Same content but different whitespace formatting should still match
+        let conn = setup_content_dedup_db(&[
+            ("a", "Note A", "# Title\n\nParagraph one\n\nParagraph two"),
+            (
+                "b",
+                "Note B",
+                "#   Title\n\n\nParagraph   one\n\nParagraph   two",
+            ),
+        ]);
+        let all_notes = load_all_note_metas(&conn, 10).unwrap();
+        let clusters = detect_content_duplicate_clusters(&conn, &all_notes).unwrap();
+        assert_eq!(
+            clusters.len(),
+            1,
+            "whitespace differences should not prevent dedup"
+        );
+    }
+
+    #[test]
+    fn detect_content_duplicates_strips_markdown_3349() {
+        // Same text but one has extra markdown should NOT match (different content)
+        let conn = setup_content_dedup_db(&[
+            ("a", "Note A", "This is important content about Rust"),
+            ("b", "Note B", "This is important content about Rust"),
+        ]);
+        let all_notes = load_all_note_metas(&conn, 10).unwrap();
+        let clusters = detect_content_duplicate_clusters(&conn, &all_notes).unwrap();
+        assert_eq!(clusters.len(), 1, "identical plain text should match");
+    }
+
+    #[test]
+    fn detect_content_duplicates_no_false_positive_3349() {
+        let conn = setup_content_dedup_db(&[
+            ("a", "Alpha", "Content about Rust programming language"),
+            ("b", "Beta", "Content about Python programming language"),
+        ]);
+        let all_notes = load_all_note_metas(&conn, 10).unwrap();
+        let clusters = detect_content_duplicate_clusters(&conn, &all_notes).unwrap();
+        assert!(clusters.is_empty(), "different content should not cluster");
+    }
+
+    #[test]
+    fn detect_content_duplicates_empty_body_skipped_3349() {
+        let conn = setup_content_dedup_db(&[
+            ("a", "Empty A", ""),
+            ("b", "Empty B", ""),
+            ("c", "Real", "Real content here"),
+        ]);
+        let all_notes = load_all_note_metas(&conn, 10).unwrap();
+        let clusters = detect_content_duplicate_clusters(&conn, &all_notes).unwrap();
+        // Empty bodies are skipped (normalized to empty string)
+        assert!(
+            clusters.is_empty(),
+            "empty bodies should not form duplicate clusters"
+        );
+    }
+
+    #[test]
+    fn merge_clusters_unions_overlapping_3349() {
+        // Title cluster: [a, b], content cluster: [b, c]
+        // Should merge into [a, b, c] since b appears in both
+        let title_clusters = vec![vec!["a".into(), "b".into()]];
+        let content_clusters = vec![vec!["b".into(), "c".into()]];
+        let merged = merge_duplicate_clusters(title_clusters, content_clusters);
+        assert_eq!(merged.len(), 1, "overlapping clusters should merge into 1");
+        assert_eq!(merged[0].len(), 3, "merged cluster should have all 3 notes");
+        assert!(merged[0].contains(&"a".to_string()));
+        assert!(merged[0].contains(&"b".to_string()));
+        assert!(merged[0].contains(&"c".to_string()));
+    }
+
+    #[test]
+    fn merge_clusters_keeps_disjoint_separate_3349() {
+        // Title cluster: [a, b], content cluster: [c, d]
+        // No overlap → should stay as 2 separate clusters
+        let title_clusters = vec![vec!["a".into(), "b".into()]];
+        let content_clusters = vec![vec!["c".into(), "d".into()]];
+        let merged = merge_duplicate_clusters(title_clusters, content_clusters);
+        assert_eq!(merged.len(), 2, "disjoint clusters should stay separate");
+    }
+
+    #[test]
+    fn normalize_body_for_hash_strips_markdown_3349() {
+        let a = normalize_body_for_hash("# Hello **World**\n\n`code` here");
+        let b = normalize_body_for_hash("Hello World code here");
+        assert_eq!(
+            a, b,
+            "markdown syntax should be stripped, leaving plain text"
+        );
+    }
+
+    #[test]
+    fn normalize_body_for_hash_collapses_whitespace_3349() {
+        let a = normalize_body_for_hash("hello\n\n\n   world");
+        let b = normalize_body_for_hash("hello world");
+        assert_eq!(a, b, "whitespace should be collapsed to single spaces");
+    }
+}

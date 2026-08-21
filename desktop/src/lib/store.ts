@@ -293,3 +293,36 @@ function stripAttachmentDataUrls(turns: ChatTurn[]): ChatTurn[] {
     };
   });
 }
+
+// ── Updater store (global download progress) ──────────────────────────────
+
+export type UpdatePhase = "idle" | "checking" | "downloading" | "ready" | "error";
+
+type UpdaterStore = {
+  phase: UpdatePhase;
+  /** Downloaded bytes (0 when unknown). */
+  downloaded: number;
+  /** Total bytes (0 when the server didn't report content-length). */
+  total: number;
+  /** Current version being downloaded from. */
+  version: string | null;
+  error: string | null;
+  setPhase: (p: UpdatePhase) => void;
+  setProgress: (downloaded: number, total: number) => void;
+  setVersion: (v: string) => void;
+  setError: (e: string) => void;
+  reset: () => void;
+};
+
+export const useUpdaterStore = create<UpdaterStore>((set) => ({
+  phase: "idle",
+  downloaded: 0,
+  total: 0,
+  version: null,
+  error: null,
+  setPhase: (phase) => set({ phase }),
+  setProgress: (downloaded, total) => set({ downloaded, total }),
+  setVersion: (version) => set({ version }),
+  setError: (error) => set({ phase: "error", error }),
+  reset: () => set({ phase: "idle", downloaded: 0, total: 0, version: null, error: null }),
+}));

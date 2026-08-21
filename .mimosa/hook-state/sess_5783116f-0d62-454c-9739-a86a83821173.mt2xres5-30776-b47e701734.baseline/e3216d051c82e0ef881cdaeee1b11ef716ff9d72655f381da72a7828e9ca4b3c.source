@@ -1,0 +1,1325 @@
+use std::{fs, path::Path};
+
+use anyhow::{anyhow, Context, Result};
+use image::{imageops::FilterType, ImageReader};
+
+use serde::{Deserialize, Serialize};
+use tracing::instrument;
+use uuid::Uuid;
+
+use crate::models::{
+    AppSettings, ChatState, IndexStats, NoteDocument, NoteMeta, SearchQuery, SearchResult,
+};
+
+pub(crate) mod agent_audit;
+mod backup;
+mod chat;
+pub(crate) mod collections;
+pub mod feeds;
+pub(crate) mod flashcards;
+pub(crate) mod instant_search;
+pub(crate) mod notes;
+pub(crate) mod pool;
+pub(crate) mod projects;
+pub(crate) mod search;
+pub(crate) mod session_export;
+mod settings;
+pub(crate) mod skills;
+pub(crate) mod snapshots;
+pub(crate) mod subscriptions;
+pub(crate) mod trigger_rules;
+
+// Re-export StorageContext so callers see no difference.
+pub use pool::StorageContext;
+
+// Re-export chat session public API so callers see no difference.
+pub use chat::{load_chat_state_with_context, save_chat_state_with_context};
+// Re-export settings public API so callers see no difference.
+#[cfg(test)]
+pub(crate) use settings::is_masked_key;
+pub use settings::{load_settings_with_context, save_settings_with_context};
+// Re-export search public API so callers see no difference.
+pub use search::{deep_search_notes, search_notes_with_context, typeahead_search};
+// Re-export zero-index instant search public API (#1903).
+pub use instant_search::{
+    instant_search_documents_with_context, instant_search_notes_with_context,
+};
+// Re-export notes public API so callers see no difference.
+pub use notes::{
+    bulk_delete_notes_async,
+    bulk_delete_notes_with_context,
+    bulk_move_notes_async,
+    bulk_move_notes_with_context,
+    bulk_update_meta_field_with_context,
+    bulk_update_tags_async,
+    bulk_update_tags_with_context,
+    delete_note_async,
+    delete_note_with_context,
+    export_all_notes_async,
+    export_all_notes_with_context,
+    export_note_markdown_async,
+    export_note_markdown_with_context,
+    extract_wikilinks,
+    find_backlinks_async,
+    find_backlinks_with_context,
+    find_note_by_title_and_tag,
+    find_note_by_title_and_tag_async,
+    find_related_notes_async,
+    find_related_notes_for_text_with_context,
+    find_related_notes_with_context,
+    // #2832: unlinked mentions support
+    find_unlinked_mentions_async,
+    find_unlinked_mentions_with_context,
+    follow_wikilinks_async,
+    follow_wikilinks_with_context,
+    import_markdown_async,
+    import_markdown_with_context,
+    load_context_notes_async,
+    load_context_notes_with_context,
+    load_note_with_context,
+    load_recent_notes_for_overview,
+    load_recent_notes_for_overview_async,
+    ocr_image_text,
+    ocr_image_text_async,
+    preview_note_fragment,
+    rebuild_index_async,
+    rebuild_index_with_context,
+    save_note_async,
+    save_note_with_context,
+    save_note_with_images_async,
+    save_note_with_images_with_context,
+    search_candidate_notes_async,
+    search_candidate_notes_with_context,
+    set_attachment_ocr_text,
+    vault_export_async,
+    vault_export_with_context,
+    BulkNoteOpFailure,
+    BulkNoteOpResult,
+    NoteNotFound,
+};
+// Re-export list_all_note_metas from search so orchestration modules can
+// iterate the full vault without access to private modules.
+pub(crate) use search::list_all_note_metas;
+// Re-export collections public API so callers see no difference.
+pub use collections::{
+    add_note_to_collection_async, add_note_to_collection_with_context,
+    count_notes_in_collection_with_context, create_collection_async,
+    create_collection_with_context, create_collection_with_parent, delete_collection_async,
+    delete_collection_with_context, get_collection_ids_for_note, get_collection_with_context,
+    get_collections_for_note_with_context, list_collections_async, list_collections_with_context,
+    list_notes_in_collection_async, list_notes_in_collection_with_context, move_collection_async,
+    move_collection_with_context, remove_note_from_collection_async,
+    remove_note_from_collection_with_context, rename_collection_async,
+    rename_collection_with_context,
+};
+// Re-export flashcards public API (#1912).
+pub use flashcards::{
+    create_flashcard_with_context, delete_flashcard_with_context, get_due_flashcards_with_context,
+    get_flashcard_stats_with_context, get_flashcard_with_context, list_flashcards_with_context,
+    review_flashcard_with_context, Flashcard, FlashcardStats, FlashcardWithState,
+};
+// Re-export subscriptions public API so callers see no difference.
+pub use subscriptions::{
+    compute_and_update_next_run, create_subscription_async, create_subscription_with_context,
+    delete_subscription_async, delete_subscription_with_context, get_last_successful_run_note,
+    get_subscription_async, get_subscription_with_context, list_due_subscriptions_with_context,
+    list_subscriptions_async, list_subscriptions_with_context, set_subscription_enabled_async,
+    set_subscription_enabled_with_context, update_subscription_async,
+    update_subscription_next_run_with_context, update_subscription_run_with_context,
+    update_subscription_with_context,
+};
+// Re-export feeds public API (#3041).
+pub use feeds::{
+    create_feed_async, create_feed_with_context, delete_feed_async, delete_feed_with_context,
+    export_opml, get_feed_async, get_feed_with_context, list_feeds_async, list_feeds_with_context,
+    opml_feeds_to_subscriptions, parse_opml, set_feed_enabled_async, set_feed_enabled_with_context,
+    update_feed_async, update_feed_fetch_result_async, update_feed_fetch_result_with_context,
+    update_feed_with_context,
+};
+// Re-export trigger_rules public API (#2984).
+pub use trigger_rules::{
+    create_trigger_rule_with_context, delete_trigger_rule_with_context,
+    get_trigger_rule_with_context, list_recent_trigger_executions_with_context,
+    list_trigger_rules_with_context, list_trigger_rules_with_status_with_context,
+    toggle_trigger_rule_with_context, update_trigger_rule_with_context, TriggerExecutionRecord,
+    TriggerRuleStatus,
+};
+// Re-export skills public API (#3068).
+pub use skills::{
+    create_skill_with_context, delete_skill_with_context, get_skill_with_context,
+    list_skills_with_context, toggle_skill_with_context, update_skill_with_context, SavedSkill,
+    SkillInvocation,
+};
+// Re-export agent_audit public API (#3287).
+pub use agent_audit::{
+    count_agent_audit_entries, insert_agent_audit_entry_with_context, list_agent_names,
+    list_operation_types, prune_agent_audit_log_with_context, query_agent_audit_log_with_context,
+    AgentAuditEntry, AuditLogQuery,
+};
+// Re-export snapshots public API (#2855).
+pub use snapshots::{
+    count_snapshots, get_snapshot, list_snapshots_for_note, record_snapshot_before_save,
+    restore_snapshot, NoteSnapshot,
+};
+
+// Re-export projects public API (#1927).
+pub use projects::{
+    add_note_to_project_with_context, create_project_with_context, delete_project_with_context,
+    get_project_with_context, list_projects_with_context, remove_note_from_project_with_context,
+    update_project_with_context,
+};
+
+// Internal imports from search module (used by remaining functions in this file)
+
+/// Write `data` to `path` atomically by writing to a temporary file first, then
+/// renaming.  On the same filesystem `rename` is guaranteed to be atomic, so a
+/// crash mid-write will never leave a truncated/corrupt file behind.
+///
+/// Uses a random UUID suffix for the temp file to prevent concurrent writers
+/// from racing on the same deterministic temp filename.
+pub(crate) fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
+    use std::io::Write;
+
+    let tmp_name = format!(
+        "{}.{}.tmp",
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("tmp"),
+        Uuid::new_v4()
+    );
+    let tmp_path = path.with_file_name(tmp_name);
+    // Create the temp file, then restrict permissions *before* writing any
+    // sensitive data so that other users can never read the contents, even
+    // in the brief window between file creation and rename (issue #186).
+    //
+    // We keep the file handle open and write through it to avoid a TOCTOU
+    // race between dropping the handle and re-opening via fs::write (#475).
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&tmp_path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        file.set_permissions(perms)?;
+    }
+    file.write_all(data).inspect_err(|_| {
+        // Clean up the temp file on write failure to prevent disk accumulation
+        let _ = fs::remove_file(&tmp_path);
+    })?;
+    file.sync_all().inspect_err(|_| {
+        let _ = fs::remove_file(&tmp_path);
+    })?;
+    drop(file);
+    fs::rename(&tmp_path, path).inspect_err(|_| {
+        // #850: Clean up temp file on rename failure (cross-device move, permissions, disk full)
+        let _ = fs::remove_file(&tmp_path);
+    })?;
+
+    // #3939: fsync the parent directory after rename so the rename itself is
+    // durably persisted. On power loss / crash, a `rename()` without a parent
+    // directory fsync may not reach disk — the file could revert to its old
+    // contents or disappear entirely. This mirrors Obsidian 1.13.5's
+    // configuration-save durability fix. On platforms without parent-dir
+    // fsync (Windows) we silently skip; the rename + child fsync already
+    // provides strong-enough guarantees there.
+    #[cfg(unix)]
+    {
+        if let Some(parent) = path.parent() {
+            // Opening the directory read-only and fsync-ing it is the POSIX
+            // idiom for durable renames. Failures here are non-fatal — the
+            // data write itself already succeeded.
+            if let Ok(dir_file) = std::fs::File::open(parent) {
+                let _ = dir_file.sync_all();
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Maximum note file size (10 MiB) — prevents OOM from oversized markdown files
+/// during import or vault rebuild (#827).
+const MAX_NOTE_FILE_SIZE: u64 = 10 * 1024 * 1024;
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub(crate) struct Frontmatter {
+    #[serde(default)]
+    pub(crate) id: String,
+    #[serde(default)]
+    pub(crate) title: String,
+    #[serde(default)]
+    pub(crate) summary: String,
+    #[serde(default)]
+    pub(crate) tags: Vec<String>,
+    #[serde(default)]
+    pub(crate) keywords: Vec<String>,
+    #[serde(default)]
+    pub(crate) platform: String,
+    #[serde(default)]
+    pub(crate) board: String,
+    #[serde(default)]
+    pub(crate) kernel: String,
+    #[serde(default)]
+    pub(crate) status: String,
+    #[serde(default)]
+    pub(crate) created_at: String,
+    #[serde(default)]
+    pub(crate) updated_at: String,
+    #[serde(default)]
+    pub(crate) source: String,
+    #[serde(default)]
+    pub(crate) collections: Vec<String>,
+}
+
+#[instrument(skip(context))]
+pub fn initialize_storage_with_context(context: &StorageContext) -> Result<AppSettings> {
+    let settings = settings::load_settings_with_context(context)?;
+    // Obtain a connection from the pool (pool handles PRAGMAs via with_init).
+    let mut connection = context
+        .pool
+        .get()
+        .with_context(|| "failed to get connection from pool")?;
+    // v2 migration gate: databases at v1 indexed FTS text with unicode61
+    // only, which folds contiguous CJK into single tokens — Chinese term
+    // queries silently miss. Re-tokenize once (bodies re-read from disk).
+    let prev_version: i32 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap_or(0);
+    pool::ensure_schema(&connection)?;
+    if prev_version == 1 {
+        match notes::migrate_fts_bigram_with_connection(&mut connection) {
+            Ok(count) => {
+                tracing::info!(
+                    notes = count,
+                    "migrated FTS indexes to CJK bigram tokenization (schema v2)"
+                );
+                connection.execute_batch("PRAGMA user_version = 2;")?;
+            }
+            Err(e) => {
+                // Leave the version at 1 so the migration retries on the
+                // next open instead of silently skipping.
+                tracing::warn!(error = %e, "FTS bigram migration failed; will retry next open");
+            }
+        }
+    }
+    fs::create_dir_all(&settings.vault_dir)?;
+    Ok(settings)
+}
+
+pub fn list_notes_with_context(context: &StorageContext) -> Result<Vec<NoteMeta>> {
+    let result = search_notes_with_context(
+        context,
+        SearchQuery {
+            text: String::new(),
+            tags: Vec::new(),
+            keywords: Vec::new(),
+            limit: Some(50),
+            ..Default::default()
+        },
+    )?;
+    Ok(result.notes)
+}
+
+/// List ALL note metadata without any limit — needed for vault-wide queries (#2813).
+///
+/// Unlike [`list_notes_with_context`] which caps at 50, this returns every note in the
+/// vault so the query engine can operate on the full dataset.
+#[instrument(skip(context))]
+pub fn list_all_notes_with_context(context: &StorageContext) -> Result<Vec<NoteMeta>> {
+    let (connection, _) = pool::open_connection(context)?;
+    list_all_note_metas(&connection)
+}
+
+/// Returns `true` if the notes table contains at least one row.
+///
+/// This is much cheaper than [`list_notes_with_context`] which loads full
+/// metadata — use this when you only need to know whether any notes exist.
+#[instrument(skip(context))]
+pub fn has_notes_with_context(context: &StorageContext) -> Result<bool> {
+    let (connection, _) = pool::open_connection(context)?;
+    let exists: bool =
+        connection.query_row("SELECT EXISTS(SELECT 1 FROM notes LIMIT 1)", [], |row| {
+            row.get(0)
+        })?;
+    Ok(exists)
+}
+
+pub fn load_note_body_from_meta(meta: &NoteMeta) -> Result<NoteDocument> {
+    let path = Path::new(&meta.path);
+    let metadata =
+        fs::metadata(path).with_context(|| format!("failed to stat {}", path.display()))?;
+    if metadata.len() > MAX_NOTE_FILE_SIZE {
+        return Err(anyhow!(
+            "note file too large ({} bytes, limit {} bytes): {}",
+            metadata.len(),
+            MAX_NOTE_FILE_SIZE,
+            path.display()
+        ));
+    }
+    let raw =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let normalized = raw.replace("\r\n", "\n");
+    let (_, body) = notes::split_frontmatter(&normalized)?;
+    Ok(NoteDocument {
+        meta: meta.clone(),
+        body: body.to_string(),
+        search_snippet: None,
+        search_score: None,
+    })
+}
+
+pub(super) fn compute_image_perceptual_hash(path: &Path) -> Option<u64> {
+    // Guard: skip files larger than 50 MB to prevent OOM from crafted images (#718)
+    const MAX_IMAGE_FILE_SIZE: u64 = 50 * 1024 * 1024;
+    let meta = std::fs::metadata(path).ok()?;
+    if meta.len() > MAX_IMAGE_FILE_SIZE {
+        tracing::warn!(
+            path = %path.display(),
+            size = meta.len(),
+            "image too large for perceptual hash, skipping"
+        );
+        return None;
+    }
+
+    // Guard: check decoded dimensions before full decode to prevent OOM from
+    // gigapixel images with small compressed size (#718)
+    const MAX_PIXELS: u64 = 4096 * 4096; // ~16 megapixels
+    let (w, h) = image::image_dimensions(path).ok()?;
+    if (w as u64).saturating_mul(h as u64) > MAX_PIXELS {
+        tracing::warn!(
+            path = %path.display(),
+            width = w,
+            height = h,
+            "image dimensions too large for perceptual hash, skipping"
+        );
+        return None;
+    }
+    let image = ImageReader::open(path).ok()?.decode().ok()?;
+    let grayscale = image
+        .resize_exact(9, 8, FilterType::Triangle)
+        .grayscale()
+        .to_luma8();
+
+    let mut hash = 0_u64;
+    for y in 0..8 {
+        for x in 0..8 {
+            hash <<= 1;
+            let left = grayscale.get_pixel(x, y)[0];
+            let right = grayscale.get_pixel(x + 1, y)[0];
+            if left > right {
+                hash |= 1;
+            }
+        }
+    }
+
+    Some(hash)
+}
+
+// ---------------------------------------------------------------------------
+// Async wrappers – spawn_blocking for all public sync storage functions
+// These prevent synchronous SQLite / file I/O from blocking the Tokio runtime.
+// ---------------------------------------------------------------------------
+
+/// Spawn-blocking wrapper for [`initialize_storage_with_context`].
+pub async fn initialize_storage_async(ctx: &StorageContext) -> Result<AppSettings> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || initialize_storage_with_context(&ctx))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`load_settings_with_context`].
+pub async fn load_settings_async(ctx: &StorageContext) -> Result<AppSettings> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || load_settings_with_context(&ctx))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`save_settings_with_context`].
+pub async fn save_settings_async(
+    ctx: &StorageContext,
+    settings: AppSettings,
+) -> Result<AppSettings> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || save_settings_with_context(&ctx, settings))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`load_chat_state_with_context`].
+pub async fn load_chat_state_async(ctx: &StorageContext) -> Result<ChatState> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || load_chat_state_with_context(&ctx))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`save_chat_state_with_context`].
+pub async fn save_chat_state_async(ctx: &StorageContext, state: &ChatState) -> Result<ChatState> {
+    let ctx = ctx.clone();
+    let state = state.clone();
+    tokio::task::spawn_blocking(move || save_chat_state_with_context(&ctx, &state))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`list_notes_with_context`].
+pub async fn list_notes_async(ctx: &StorageContext) -> Result<Vec<NoteMeta>> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || list_notes_with_context(&ctx))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`has_notes_with_context`].
+pub async fn has_notes_async(ctx: &StorageContext) -> Result<bool> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || has_notes_with_context(&ctx))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`search_notes_with_context`].
+pub async fn search_notes_async(ctx: &StorageContext, query: SearchQuery) -> Result<SearchResult> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || search_notes_with_context(&ctx, query))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`typeahead_search`].
+pub async fn typeahead_search_async(
+    ctx: &StorageContext,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<NoteMeta>> {
+    let ctx = ctx.clone();
+    let query = query.to_owned();
+    tokio::task::spawn_blocking(move || typeahead_search(&ctx, &query, limit))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`deep_search_notes`].
+pub async fn deep_search_notes_async(
+    ctx: &StorageContext,
+    query: SearchQuery,
+) -> Result<SearchResult> {
+    let ctx = ctx.clone();
+    tokio::task::spawn_blocking(move || deep_search_notes(&ctx, query))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+pub async fn load_note_async(ctx: &StorageContext, note_id: &str) -> Result<NoteDocument> {
+    let ctx = ctx.clone();
+    let note_id = note_id.to_owned();
+    tokio::task::spawn_blocking(move || load_note_with_context(&ctx, &note_id))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`snapshots::list_snapshots_for_note`].
+pub async fn list_snapshots_for_note_async(
+    ctx: &StorageContext,
+    note_id: &str,
+) -> Result<Vec<NoteSnapshot>> {
+    let ctx = ctx.clone();
+    let note_id = note_id.to_owned();
+    tokio::task::spawn_blocking(move || snapshots::list_snapshots_for_note(&ctx, &note_id))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`snapshots::get_snapshot`].
+pub async fn get_snapshot_async(
+    ctx: &StorageContext,
+    snapshot_id: &str,
+) -> Result<Option<NoteSnapshot>> {
+    let ctx = ctx.clone();
+    let snapshot_id = snapshot_id.to_owned();
+    tokio::task::spawn_blocking(move || snapshots::get_snapshot(&ctx, &snapshot_id))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Spawn-blocking wrapper for [`snapshots::restore_snapshot`].
+pub async fn restore_snapshot_async(
+    ctx: &StorageContext,
+    note_id: &str,
+    snapshot_id: &str,
+) -> Result<NoteDocument> {
+    let ctx = ctx.clone();
+    let note_id = note_id.to_owned();
+    let snapshot_id = snapshot_id.to_owned();
+    tokio::task::spawn_blocking(move || snapshots::restore_snapshot(&ctx, &note_id, &snapshot_id))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking failed: {e}"))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pool::AppPaths;
+    use super::search::{
+        derived_note_id, fallback_source, fallback_title, hash_content, image_similarity_score,
+        is_markdown_file, sanitize_terms, slugify,
+    };
+    use super::settings::normalize_settings;
+    use super::*;
+    use crate::models::{ChatSession, ProviderConfig, ResponseStyle};
+    use chrono::Utc;
+    use std::path::PathBuf;
+
+    fn setup_temp_context() -> (PathBuf, StorageContext) {
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-test-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&temp).expect("temp dir");
+        let ctx = StorageContext::for_test(&temp);
+        (temp, ctx)
+    }
+
+    // ══════════════════════════════════════
+    // Phase 1: Pure Logic Tests
+    // ══════════════════════════════════════
+
+    // ── 1.0 existing tests (preserved) ──
+
+    #[test]
+    fn atomic_write_durable_with_parent_dir_fsync_3939() {
+        // #3939: atomic_write must not panic/error after adding parent-dir
+        // fsync. Verifies the file content is correct and no temp files leak.
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-atomic-3939-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&temp).expect("temp dir");
+        let target = temp.join("config.json");
+        let payload = b"{\"hello\":\"world\"}";
+
+        atomic_write(&target, payload).expect("atomic_write succeeds");
+
+        // Content must match exactly.
+        let read_back = fs::read(&target).expect("read back");
+        assert_eq!(read_back, payload);
+
+        // No leftover .tmp files in the parent directory.
+        let leaks: Vec<_> = fs::read_dir(&temp)
+            .expect("read dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_str()
+                    .map(|n| n.ends_with(".tmp"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        assert!(
+            leaks.is_empty(),
+            "temp file leaked after atomic_write: {:?}",
+            leaks
+        );
+
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn derived_id_is_stable_for_same_path() {
+        let path = PathBuf::from(r"D:\vault\2026\04\boot-timeout.md");
+        assert_eq!(derived_note_id(&path), derived_note_id(&path));
+    }
+
+    #[test]
+    fn settings_parser_tolerates_utf8_bom() {
+        let raw = "\u{feff}{\"vaultDir\":\"D:\\\\Vault\",\"provider\":{\"apiKey\":\"k\",\"baseUrl\":\"u\",\"model\":\"m\",\"requestTimeoutMs\":1}}";
+        let normalized = raw.trim_start_matches('\u{feff}');
+        let parsed: AppSettings =
+            serde_json::from_str(normalized).expect("parse settings with bom");
+        assert_eq!(parsed.vault_dir, "D:\\Vault");
+        assert_eq!(parsed.provider.model, "m");
+    }
+
+    #[test]
+    fn image_hash_scores_identical_images_higher() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "vaultpilot-image-hash-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&temp_root).expect("temp dir");
+
+        let exact = temp_root.join("exact.png");
+        let different = temp_root.join("different.png");
+
+        let mut exact_image = image::GrayImage::new(9, 8);
+        let mut different_image = image::GrayImage::new(9, 8);
+        for y in 0..8 {
+            for x in 0..9 {
+                exact_image.put_pixel(x, y, image::Luma([if x < 4 { 255 } else { 0 }]));
+                different_image.put_pixel(x, y, image::Luma([if y < 4 { 255 } else { 0 }]));
+            }
+        }
+
+        exact_image.save(&exact).expect("save exact");
+        different_image.save(&different).expect("save different");
+
+        let exact_hash = compute_image_perceptual_hash(&exact).expect("exact hash");
+        let different_hash = compute_image_perceptual_hash(&different).expect("different hash");
+
+        assert!(image_similarity_score(exact_hash, exact_hash) > 0);
+        assert!(
+            image_similarity_score(exact_hash, exact_hash)
+                > image_similarity_score(exact_hash, different_hash)
+        );
+    }
+
+    // ── 1.3 slugify ──
+
+    #[test]
+    fn slugify_ascii_input() {
+        assert_eq!(slugify("Hello World"), "hello-world");
+    }
+
+    #[test]
+    fn slugify_special_characters() {
+        assert_eq!(slugify("a/b\\c:d*e?f"), "a-b-c-d-e-f");
+    }
+
+    #[test]
+    fn slugify_empty_returns_note() {
+        let result = slugify("");
+        assert!(
+            result.starts_with("note-"),
+            "empty input should produce note-<hash>, got: {result}"
+        );
+        assert!(
+            result.len() > "note-".len(),
+            "hash suffix should be present"
+        );
+    }
+
+    #[test]
+    fn slugify_consecutive_special_chars_single_dash() {
+        assert_eq!(slugify("a---b"), "a-b");
+    }
+
+    #[test]
+    fn slugify_trims_leading_trailing_dashes() {
+        assert_eq!(slugify("---hello---"), "hello");
+    }
+
+    #[test]
+    fn slugify_cjk_transliterated() {
+        // Common CJK characters transliterate to pinyin via deunicode
+        let result = slugify("测试中文");
+        assert_eq!(result, "ce-shi-zhong-wen");
+    }
+
+    #[test]
+    fn slugify_cjk_fallback_with_hash() {
+        // CJK punctuation that deunicode cannot transliterate to alphanumeric
+        // should produce a distinguishable "note-<hash>" slug instead of bare "note".
+        let result = slugify("\u{3001}\u{3002}\u{300C}\u{300D}");
+        assert!(
+            result.starts_with("note-"),
+            "non-transliterable input should produce note-<hash>, got: {result}"
+        );
+        assert!(result.len() > "note-".len());
+    }
+
+    // ── 1.4 fallback_title / fallback_source ──
+
+    #[test]
+    fn fallback_title_empty_returns_default() {
+        assert_eq!(fallback_title(""), "Untitled Note");
+        assert_eq!(fallback_title("  "), "Untitled Note");
+    }
+
+    #[test]
+    fn fallback_title_nonempty_returns_trimmed() {
+        assert_eq!(fallback_title("MMC timeout"), "MMC timeout");
+    }
+
+    #[test]
+    fn fallback_source_empty_returns_manual() {
+        assert_eq!(fallback_source(""), "manual");
+        assert_eq!(fallback_source("  "), "manual");
+    }
+
+    #[test]
+    fn fallback_source_nonempty_returns_trimmed() {
+        assert_eq!(fallback_source("imported"), "imported");
+    }
+
+    // ── 1.6 sanitize_terms ──
+
+    #[test]
+    fn sanitize_terms_deduplicates() {
+        assert_eq!(
+            sanitize_terms(&["kernel".to_string(), "Kernel".to_string()]),
+            vec!["kernel"]
+        );
+    }
+
+    #[test]
+    fn sanitize_terms_filters_empty() {
+        assert_eq!(
+            sanitize_terms(&["tag".to_string(), "".to_string(), "  ".to_string()]),
+            vec!["tag"]
+        );
+    }
+
+    // ── 1.7 hash_content ──
+
+    #[test]
+    fn hash_content_stable() {
+        assert_eq!(hash_content("hello"), hash_content("hello"));
+    }
+
+    #[test]
+    fn hash_content_different_inputs() {
+        assert_ne!(hash_content("hello"), hash_content("world"));
+    }
+
+    #[test]
+    fn hash_content_empty_string() {
+        let hash = hash_content("");
+        assert!(!hash.is_empty());
+        assert_eq!(hash.len(), 64); // SHA-256 hex
+    }
+
+    // ── 1.8 is_markdown_file ──
+
+    #[test]
+    fn is_markdown_file_accepts_md() {
+        assert!(is_markdown_file(Path::new("note.md")));
+        assert!(is_markdown_file(Path::new("note.MD")));
+    }
+
+    #[test]
+    fn is_markdown_file_rejects_non_md() {
+        assert!(!is_markdown_file(Path::new("note.txt")));
+        assert!(!is_markdown_file(Path::new("note")));
+        assert!(!is_markdown_file(Path::new("note.md.bak")));
+    }
+
+    // ── 1.29 normalize_settings ──
+
+    #[test]
+    fn normalize_settings_fills_defaults() {
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-settings-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&temp).expect("temp dir");
+        let paths = AppPaths {
+            settings_path: temp.join("s.json"),
+            database_path: temp.join("db.sqlite"),
+            chat_state_path: temp.join("cs.json"),
+            default_vault_dir: temp.join("default-vault"),
+            vault_dir_override: None,
+        };
+        let mut settings = AppSettings::default();
+        normalize_settings(&mut settings, &paths);
+        assert!(!settings.vault_dir.is_empty());
+        assert!(!settings.provider.base_url.is_empty());
+        assert!(settings.provider.request_timeout_ms > 0);
+    }
+
+    #[test]
+    fn normalize_settings_zero_timeout_gets_default() {
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-settings-zero-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&temp).expect("temp dir");
+        let paths = AppPaths {
+            settings_path: temp.join("s.json"),
+            database_path: temp.join("db.sqlite"),
+            chat_state_path: temp.join("cs.json"),
+            default_vault_dir: temp.join("default-vault"),
+            vault_dir_override: None,
+        };
+        let mut settings = AppSettings {
+            provider: ProviderConfig {
+                request_timeout_ms: 0,
+                context_window_tokens: Some(0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        normalize_settings(&mut settings, &paths);
+        assert_eq!(
+            settings.provider.request_timeout_ms,
+            crate::models::default_timeout_ms()
+        );
+        assert!(settings.provider.context_window_tokens.is_none());
+    }
+
+    #[test]
+    fn normalize_settings_vault_dir_override_wins() {
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-settings-override-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&temp).expect("temp dir");
+        let override_dir = temp.join("my-vault");
+        let paths = AppPaths {
+            settings_path: temp.join("s.json"),
+            database_path: temp.join("db.sqlite"),
+            chat_state_path: temp.join("cs.json"),
+            default_vault_dir: temp.join("default-vault"),
+            vault_dir_override: Some(override_dir.clone()),
+        };
+        let mut settings = AppSettings {
+            vault_dir: "/old/path".into(),
+            ..Default::default()
+        };
+        normalize_settings(&mut settings, &paths);
+        assert_eq!(settings.vault_dir, override_dir.to_string_lossy());
+    }
+
+    #[test]
+    fn normalize_settings_clamps_active_provider_index() {
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-settings-clamp-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&temp).expect("temp dir");
+        let paths = AppPaths {
+            settings_path: temp.join("s.json"),
+            database_path: temp.join("db.sqlite"),
+            chat_state_path: temp.join("cs.json"),
+            default_vault_dir: temp.join("default-vault"),
+            vault_dir_override: None,
+        };
+        let mut settings = AppSettings {
+            providers: vec![ProviderConfig::default()],
+            active_provider_index: 5,
+            ..Default::default()
+        };
+        normalize_settings(&mut settings, &paths);
+        assert_eq!(settings.active_provider_index, 0);
+    }
+
+    #[test]
+    fn normalize_settings_multi_provider_gets_defaults() {
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-settings-multi-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&temp).expect("temp dir");
+        let paths = AppPaths {
+            settings_path: temp.join("s.json"),
+            database_path: temp.join("db.sqlite"),
+            chat_state_path: temp.join("cs.json"),
+            default_vault_dir: temp.join("default-vault"),
+            vault_dir_override: None,
+        };
+        let mut settings = AppSettings {
+            providers: vec![
+                ProviderConfig {
+                    base_url: "".into(),
+                    model: "".into(),
+                    request_timeout_ms: 0,
+                    context_window_tokens: Some(0),
+                    ..Default::default()
+                },
+                ProviderConfig {
+                    base_url: "https://custom.api".into(),
+                    model: "custom-model".into(),
+                    request_timeout_ms: 30_000,
+                    context_window_tokens: Some(4096),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        normalize_settings(&mut settings, &paths);
+        // First provider: empty fields get defaults
+        assert_eq!(
+            settings.providers[0].base_url,
+            crate::models::default_base_url()
+        );
+        assert_eq!(settings.providers[0].model, crate::models::default_model());
+        assert_eq!(
+            settings.providers[0].request_timeout_ms,
+            crate::models::default_timeout_ms()
+        );
+        assert!(settings.providers[0].context_window_tokens.is_none());
+        // Second provider: non-empty fields preserved
+        assert_eq!(settings.providers[1].base_url, "https://custom.api");
+        assert_eq!(settings.providers[1].model, "custom-model");
+        assert_eq!(settings.providers[1].request_timeout_ms, 30_000);
+        assert_eq!(settings.providers[1].context_window_tokens, Some(4096));
+    }
+
+    #[test]
+    fn for_cli_uses_vault_local_state_paths_when_override_is_provided() {
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-cli-paths-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let vault_dir = temp.join("vault");
+
+        let ctx = StorageContext::for_cli(Some(vault_dir.clone())).expect("cli context");
+
+        assert_eq!(ctx.paths.default_vault_dir, vault_dir);
+        assert_eq!(ctx.paths.vault_dir_override, Some(vault_dir.clone()));
+        // The secret-bearing settings + local chat state now live OUTSIDE the
+        // synced vault (device-local OS config dir), so the machine-bound key
+        // is never shared across devices (issue #2831).
+        let cli_state_dir =
+            StorageContext::cli_config_root().join(StorageContext::vault_namespace(&vault_dir));
+        assert_eq!(ctx.paths.settings_path, cli_state_dir.join("settings.json"));
+        assert_eq!(
+            ctx.paths.chat_state_path,
+            cli_state_dir.join("chat-state.json")
+        );
+        // The regenerable knowledge index stays inside the vault.
+        assert_eq!(
+            ctx.paths.database_path,
+            vault_dir.join(".vaultpilot").join("knowledge-index.sqlite")
+        );
+    }
+
+    #[test]
+    fn for_cli_keeps_secret_outside_synced_vault_issue_2831() {
+        let temp = std::env::temp_dir().join(format!(
+            "vaultpilot-cli-secret-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let vault_dir = temp.join("vault");
+        fs::create_dir_all(&vault_dir).unwrap();
+
+        let ctx = StorageContext::for_cli(Some(vault_dir.clone())).expect("cli context");
+
+        // settings.json must NOT be placed under <vault>/.vaultpilot — otherwise
+        // the machine-bound encrypted API key would sync with the vault and fail
+        // to decrypt on a second device.
+        assert!(
+            !ctx.paths.settings_path.starts_with(&vault_dir),
+            "settings.json must not live inside the synced vault: {:?}",
+            ctx.paths.settings_path
+        );
+        // Migration must relocate any pre-existing in-vault settings file.
+        let legacy = vault_dir.join(".vaultpilot").join("settings.json");
+        fs::write(&legacy, r#"{"providers":[]}"#).unwrap();
+        let ctx2 = StorageContext::for_cli(Some(vault_dir.clone())).expect("cli context");
+        assert!(
+            ctx2.paths.settings_path.exists(),
+            "migrated settings.json should exist"
+        );
+        assert!(
+            !legacy.exists() || ctx2.paths.settings_path == legacy,
+            "legacy in-vault settings.json should be migrated out"
+        );
+    }
+
+    // ══════════════════════════════════════
+    // Phase 5: Integration Tests
+    // ══════════════════════════════════════
+
+    #[test]
+    fn initialize_storage_creates_db_and_vault() {
+        let (_temp, ctx) = setup_temp_context();
+        let settings = initialize_storage_with_context(&ctx).expect("init");
+        assert!(ctx.paths.database_path.exists());
+        assert!(!settings.vault_dir.is_empty());
+        assert!(Path::new(&settings.vault_dir).exists());
+    }
+
+    #[test]
+    fn save_and_load_note_round_trip() {
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+
+        let note = NoteDocument {
+            meta: NoteMeta {
+                id: String::new(), // will be assigned
+                title: "Test Round Trip".to_string(),
+                tags: vec!["test".to_string()],
+                keywords: vec!["round-trip".to_string()],
+                platform: "test".to_string(),
+                board: "evk".to_string(),
+                kernel: "5.10".to_string(),
+                status: "active".to_string(),
+                created_at: String::new(),
+                updated_at: String::new(),
+                source: String::new(),
+                path: String::new(),
+                summary: String::new(),
+                collections: Vec::new(),
+            },
+            body: "## Test\n\nRound trip body content".to_string(),
+            search_snippet: None,
+            search_score: None,
+        };
+
+        let saved = save_note_with_context(&ctx, note).expect("save");
+        assert!(!saved.meta.id.is_empty());
+        assert!(!saved.meta.path.is_empty());
+        assert!(saved.meta.path.ends_with(".md"));
+
+        let loaded = load_note_with_context(&ctx, &saved.meta.id).expect("load");
+        assert_eq!(loaded.meta.title, "Test Round Trip");
+        assert_eq!(loaded.meta.tags, vec!["test"]);
+        assert!(loaded.body.contains("Round trip body content"));
+    }
+
+    #[test]
+    fn delete_note_removes_file_and_index() {
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+
+        let note = NoteDocument {
+            meta: NoteMeta {
+                title: "To Delete".to_string(),
+                ..Default::default()
+            },
+            body: "Temporary content".to_string(),
+            search_snippet: None,
+            search_score: None,
+        };
+        let saved = save_note_with_context(&ctx, note).expect("save");
+        let path = saved.meta.path.clone();
+
+        assert!(delete_note_with_context(&ctx, &saved.meta.id, None).expect("delete"));
+        assert!(load_note_with_context(&ctx, &saved.meta.id).is_err());
+        assert!(!Path::new(&path).exists());
+    }
+
+    #[test]
+    fn delete_nonexistent_note_returns_false() {
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+        assert!(!delete_note_with_context(&ctx, "ghost-id", None).expect("delete ghost"));
+    }
+
+    #[test]
+    fn import_markdown_adds_to_index() {
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+
+        // #1826: Import source must be inside the vault directory.
+        let vault_dir = _temp.join("vault");
+        let import_dir = vault_dir.join("import-source");
+        fs::create_dir_all(&import_dir).expect("import dir");
+        let md_file = import_dir.join("imported-note.md");
+        fs::write(
+            &md_file,
+            "---\ntitle: Imported Note\n---\n\nImported body content\n",
+        )
+        .expect("write md");
+
+        let result = import_markdown_with_context(&ctx, &[md_file.to_string_lossy().to_string()])
+            .expect("import");
+        assert_eq!(result.imported, 1);
+        assert!(result.errors.is_empty());
+    }
+
+    #[test]
+    fn settings_round_trip() {
+        let (_temp, ctx) = setup_temp_context();
+        let custom = AppSettings {
+            vault_dir: _temp.join("my-vault").to_string_lossy().to_string(),
+            provider: ProviderConfig {
+                name: "test".to_string(),
+                api_key: "test-key".to_string(),
+                base_url: "https://custom.api.com".to_string(),
+                model: "custom-model".to_string(),
+                request_timeout_ms: 99_000,
+                context_window_tokens: Some(200_000),
+                max_output_tokens: None,
+                provider_type: None,
+            },
+            providers: Vec::new(),
+            active_provider_index: 0,
+            auto_check_updates: false,
+            auto_wake_enabled: true,
+            auto_wake_interval_minutes: 60,
+            auto_wake_model: "claude-3-5-haiku-latest".to_string(),
+            auto_wake_start_time: "05:00".to_string(),
+            auto_wake_end_time: "23:00".to_string(),
+            auto_wake_prompt: String::new(),
+            response_style: ResponseStyle::Standard,
+            context_compression: true,
+            compression_threshold: 0.9,
+            model_routing: crate::models::ModelRoutingConfig::default(),
+            active_prompt_name: None,
+            session_export_enabled: false,
+            session_export_path: None,
+            system_directive: String::new(),
+            privacy_mode: false,
+            embedding_provider: crate::semantic::EmbeddingProvider::default(),
+            allowed_uris: Vec::new(),
+            proxy_url: None,
+            app_lock_enabled: false,
+            app_lock_pin_hash: None,
+            custom_tools: Vec::new(),
+            is_always_on_top: false,
+            smart_paste_enabled: true,
+            heading_numbering: true,
+            attachment_cleanup_on_note_delete: crate::models::AttachmentCleanupMode::default(),
+            session_tabs: Vec::new(),
+            active_tab_index: None,
+            default_template: None,
+        };
+
+        let _saved = save_settings_with_context(&ctx, custom.clone()).expect("save settings");
+        let loaded = load_settings_with_context(&ctx).expect("load settings");
+        assert_eq!(loaded.provider.api_key, "test-key");
+        assert_eq!(loaded.provider.model, "custom-model");
+        assert_eq!(loaded.provider.request_timeout_ms, 99_000);
+        assert_eq!(loaded.provider.context_window_tokens, Some(200_000));
+        // #1928: compression settings persist across save/load.
+        assert!(loaded.context_compression);
+        assert_eq!(loaded.compression_threshold, 0.9);
+        // #4062: heading-numbering toggle persists across save/load.
+        assert!(loaded.heading_numbering);
+    }
+
+    #[test]
+    fn settings_api_key_encrypted_on_disk() {
+        let (_temp, ctx) = setup_temp_context();
+        let custom = AppSettings {
+            vault_dir: _temp.join("vault-enc").to_string_lossy().to_string(),
+            provider: ProviderConfig {
+                name: "test".to_string(),
+                api_key: "sk-sec...2345".to_string(),
+                base_url: "https://custom.api.com".to_string(),
+                model: "custom-model".to_string(),
+                request_timeout_ms: 99_000,
+                context_window_tokens: None,
+                max_output_tokens: None,
+                provider_type: None,
+            },
+            ..Default::default()
+        };
+
+        save_settings_with_context(&ctx, custom).expect("save settings");
+
+        // Read the raw file content — the API key must NOT appear in plaintext.
+        let raw = fs::read_to_string(&ctx.paths.settings_path).expect("read settings file");
+        assert!(
+            !raw.contains("sk-sec...2345"),
+            "API key must not appear in plaintext on disk"
+        );
+        assert!(
+            raw.contains("ENC:v1:"),
+            "settings file must contain encrypted API key"
+        );
+
+        // (a) Parse the on-disk JSON to verify the on-disk value differs from plaintext.
+        let parsed: serde_json::Value =
+            serde_json::from_str(&raw).expect("parse on-disk settings JSON");
+        let on_disk_key = parsed["provider"]["apiKey"]
+            .as_str()
+            .expect("api_key should be a string");
+        assert_ne!(
+            on_disk_key, "sk-sec...2345",
+            "on-disk API key must differ from plaintext"
+        );
+        assert!(
+            on_disk_key.starts_with("ENC:v1:"),
+            "on-disk API key should have ENC:v1: prefix"
+        );
+
+        // (b) Decrypt the on-disk value and verify round-trip.
+        let decrypted = crate::crypto::decrypt_secret(on_disk_key).expect("decrypt on-disk key");
+        assert_eq!(
+            decrypted, "sk-sec...2345",
+            "decrypted on-disk key must match original plaintext"
+        );
+
+        // Also verify the full load pipeline returns the plaintext key.
+        let loaded = load_settings_with_context(&ctx).expect("load settings");
+        assert_eq!(loaded.provider.api_key, "sk-sec...2345");
+    }
+
+    #[test]
+    fn chat_state_round_trip() {
+        let (_temp, ctx) = setup_temp_context();
+        let state = ChatState {
+            current_session_id: "s1".to_string(),
+            sessions: vec![ChatSession {
+                id: "s1".to_string(),
+                title: "Test Session".to_string(),
+                turns: vec![crate::models::ChatTurn {
+                    id: "t1".to_string(),
+                    role: "user".to_string(),
+                    text: "hello".to_string(),
+                    ..Default::default()
+                }],
+                summary: None,
+                created_at: "2026-01-01T00:00:00Z".to_string(),
+                updated_at: "2026-01-01T00:00:00Z".to_string(),
+            }],
+        };
+
+        save_chat_state_with_context(&ctx, &state).expect("save chat");
+        let loaded = load_chat_state_with_context(&ctx).expect("load chat");
+        assert_eq!(loaded.sessions.len(), 1);
+        assert_eq!(loaded.sessions[0].title, "Test Session");
+    }
+
+    #[test]
+    fn rebuild_index_recovers_from_manual_db_edit() {
+        let (_temp, ctx) = setup_temp_context();
+        initialize_storage_with_context(&ctx).expect("init");
+
+        let note = NoteDocument {
+            meta: NoteMeta {
+                title: "Rebuild Test".to_string(),
+                ..Default::default()
+            },
+            body: "Content that should survive rebuild".to_string(),
+            search_snippet: None,
+            search_score: None,
+        };
+        save_note_with_context(&ctx, note).expect("save");
+
+        let stats = rebuild_index_with_context(&ctx).expect("rebuild");
+        assert!(stats.scanned > 0);
+        assert!(stats.indexed > 0);
+    }
+    #[test]
+    fn export_id_prefix_safe_for_short_ids() {
+        // Regression test for #675: [..8] panics on IDs shorter than 8 bytes
+        // Updated for #843: chars().take(8) prevents UTF-8 boundary panic
+        let short_id = "ab";
+        let id_prefix: String = short_id.chars().take(8).collect();
+        assert_eq!(id_prefix, "ab");
+
+        let exact_8 = "12345678";
+        let id_prefix: String = exact_8.chars().take(8).collect();
+        assert_eq!(id_prefix, "12345678");
+
+        let long_id = "1234567890abcdef";
+        let id_prefix: String = long_id.chars().take(8).collect();
+        assert_eq!(id_prefix, "12345678");
+
+        let empty_id = "";
+        let id_prefix: String = empty_id.chars().take(8).collect();
+        assert_eq!(id_prefix, "");
+    }
+
+    #[test]
+    fn export_id_prefix_safe_for_cjk_ids() {
+        // Regression test for #843: byte-slice panics on non-ASCII note IDs
+        // CJK characters are 3 bytes each; byte [..8] would split 語
+        let cjk_id = "日本語abcdefghij";
+        let id_prefix: String = cjk_id.chars().take(8).collect();
+        assert_eq!(id_prefix, "日本語abcde"); // 日,本,語,a,b,c,d,e = 8 chars
+
+        let short_cjk = "日本語";
+        let id_prefix: String = short_cjk.chars().take(8).collect();
+        assert_eq!(id_prefix, "日本語");
+
+        let mixed_cjk = "abc日本語def";
+        let id_prefix: String = mixed_cjk.chars().take(8).collect();
+        assert_eq!(id_prefix, "abc日本語de"); // a,b,c,日,本,語,d,e = 8 chars
+    }
+}

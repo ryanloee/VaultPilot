@@ -1,0 +1,269 @@
+name: Release
+
+# Release pipeline after the WinUI client was removed: the Rust
+# backend (vaultpilot-agent / vaultpilot-cli) is validated on Windows, the
+# Linux CLI is packaged, and tag pushes publish the Linux artifacts.
+# Windows desktop releases will be added back once the new Tauri desktop
+# frontend (desktop/) lands with its own bundling pipeline.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  validate:
+    permissions:
+      contents: read
+    runs-on: windows-2022
+    # Defensive cap: a hung step must fail fast instead of burning the full
+    # 6h GitHub default and cancelling the whole release.
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: clippy
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Create log directory
+        shell: powershell
+        run: New-Item -ItemType Directory -Force -Path artifacts/logs | Out-Null
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      - name: Install frontend deps
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      # Tauri's generate_context! reads tauri.conf.json frontendDist — the
+      # frontend must be built before cargo test/clippy compile the desktop crate.
+      - name: Build frontend
+        working-directory: desktop
+        run: pnpm build
+
+      - name: Run tests
+        shell: powershell
+        run: cargo test --workspace --all-targets
+
+      - name: Run clippy
+        shell: powershell
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Install cargo-audit
+        shell: powershell
+        env:
+          CARGO_HTTP_HTTP2: "0"
+        run: |
+          for ($i = 1; $i -le 5; $i++) {
+            cargo install cargo-audit --locked --force
+            if ($LASTEXITCODE -eq 0) { break }
+            if ($i -lt 5) {
+              Write-Host "Attempt $i failed, retrying in 30s..."
+              Start-Sleep -Seconds 30
+            } else {
+              Write-Host "Attempt $i failed, giving up"
+            }
+          }
+          if ($LASTEXITCODE -ne 0) { throw "cargo install cargo-audit failed after 5 attempts" }
+
+      - name: Run cargo audit
+        shell: powershell
+        # NOTE: not `--deny warnings` — the Tauri Linux GUI chain (gtk-rs
+        # 0.18 / WebKit) is flagged "unmaintained" by RustSec. Those are
+        # transitive Linux-only advisories, not exploitable in the shipped
+        # Windows/Android artifacts. Real vulnerabilities still fail audit.
+        run: cargo audit
+
+      - name: Build backend binaries
+        shell: powershell
+        run: cargo build --release --bins
+
+      - name: Verify backend outputs
+        shell: powershell
+        run: |
+          $required = @(
+            "target/release/vaultpilot-agent.exe",
+            "target/release/vaultpilot-cli.exe"
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path $path)) {
+              throw "Expected backend binary not found: $path"
+            }
+          }
+
+      # Release gate: the Rust backend agent must start, answer JSON-RPC,
+      # and survive a heartbeat window. Catches "backend disconnect"-class
+      # regressions (agent won't start / protocol breakage / startup panic)
+      # before a version ships.
+      - name: Smoke test agent backend
+        shell: powershell
+        run: |
+          ./scripts/smoke-test-agent.ps1 `
+            -ExePath "target/release/vaultpilot-agent.exe" `
+            -HeartbeatSeconds 20
+
+      - name: Upload validation diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-validate-logs
+          path: artifacts/logs
+          if-no-files-found: warn
+          retention-days: 7
+
+  linux_build:
+    permissions:
+      contents: read
+    needs: validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Linux packaging prerequisites
+        run: |
+          # Remove broken Microsoft apt repos that cause update failures (#2613)
+          sudo rm -f /etc/apt/sources.list.d/microsoft*.list 2>/dev/null || true
+          sudo apt-get update
+          sudo apt-get install -y xz-utils dpkg-dev libssl-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Linux CLI artifacts
+        run: |
+          chmod +x scripts/build-linux-cli.sh
+          ./scripts/build-linux-cli.sh --platforms x64 --format all
+
+      - name: Verify Linux CLI outputs
+        run: |
+          test -f artifacts/linux-cli/bin/linux-x64/vaultpilot-cli
+          compgen -G "artifacts/linux-cli/packages/linux-x64/*.deb" > /dev/null
+
+      - name: Smoke test Linux CLI
+        run: |
+          chmod +x scripts/smoke-test-linux-cli.sh
+          ./scripts/smoke-test-linux-cli.sh artifacts/linux-cli/bin/linux-x64/vaultpilot-cli
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-package-x64
+          path: |
+            artifacts/linux-cli/bin/linux-x64/vaultpilot-cli
+            artifacts/linux-cli/packages/linux-x64/*.deb
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    permissions:
+      contents: write
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: linux_build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download Linux x64 package
+        uses: actions/download-artifact@v8
+        with:
+          name: linux-package-x64
+          path: release-assets/linux-x64
+
+      - name: Inspect downloaded assets
+        run: |
+          find release-assets/linux-x64 -type f -o -type l | sort
+
+      - name: Generate SHA256 checksums for supply chain verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          checksumDir="release-assets/checksums"
+          mkdir -p "$checksumDir"
+          find release-assets -type f ! -name '*.sha256' -print0 | while IFS= read -r -d '' f; do
+            hash=$(sha256sum "$f" | awk '{print $1}')
+            name=$(basename "$f")
+            printf '%s  %s\n' "$hash" "$name" >> "$checksumDir/SHA256SUMS"
+          done
+          echo "=== SHA256SUMS ==="
+          cat "$checksumDir/SHA256SUMS"
+          (cd "$checksumDir" && zip -q SHA256SUMS.zip SHA256SUMS)
+          echo "Checksums generated successfully"
+
+      - name: Publish release assets
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ github.ref_name }}"
+          repo="${{ github.repository }}"
+          version="${tag#v}"
+          release_title="VaultPilot $version"
+          api_base="https://api.github.com/repos/$repo"
+
+          # Three workflows (Android, Linux CLI, Windows/Linux UI) race to
+          # create the same-tag release; a 422 "already exists" here is not
+          # an error — uploads (--clobber) are idempotent.
+          release=$(gh api "repos/$repo/releases/tags/$tag" 2>/dev/null || true)
+          if [ -z "$release" ]; then
+            prerelease=false
+            case "$tag" in
+              *-rc*|*-beta*|*-alpha*|*-preview*) prerelease=true ;;
+            esac
+            gh api -X POST "$api_base/releases" \
+              -f tag_name="$tag" \
+              -f name="$release_title" \
+              -f body="" \
+              -F draft=false \
+              -F prerelease="$prerelease" >/dev/null \
+              || echo "note: release already exists (concurrent workflow), continuing"
+          fi
+
+          # Upload with retries — transient API failures must not abort the
+          # publish and leave the release half-assembled.
+          retry_upload() {
+            local f="$1" attempt
+            for attempt in 1 2 3 4 5; do
+              if gh release upload "$tag" "$f" --clobber; then
+                echo "Uploaded: $(basename "$f")"
+                return 0
+              fi
+              echo "Upload attempt $attempt/5 failed: $(basename "$f")"
+              sleep 10
+            done
+            echo "FAILED to upload after 5 attempts: $f" >&2
+            return 1
+          }
+
+          find release-assets/linux-x64 -type f \( -name vaultpilot-cli -o -name '*.deb' \) -print0 \
+            | while IFS= read -r -d '' f; do retry_upload "$f"; done
+          retry_upload release-assets/checksums/SHA256SUMS.zip
+          echo "Uploaded Linux CLI assets to release $tag"

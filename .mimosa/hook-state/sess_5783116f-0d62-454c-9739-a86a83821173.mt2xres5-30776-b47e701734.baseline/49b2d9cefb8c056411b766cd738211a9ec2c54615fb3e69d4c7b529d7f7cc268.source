@@ -1,0 +1,304 @@
+name: Android Build (Tauri)
+
+on:
+  push:
+    branches: [main]
+    paths: [desktop/**, .github/workflows/android-build.yml]
+    tags:
+      - "v*"
+  pull_request:
+    branches: [main]
+    paths: [desktop/**, .github/workflows/android-build.yml]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: aarch64
+            rust_target: aarch64-linux-android
+          - abi: armv7
+            rust_target: armv7-linux-androideabi
+          - abi: x86_64
+            rust_target: x86_64-linux-android
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install Android NDK
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(command -v sdkmanager)"
+          fi
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" "platform-tools" "ndk;26.1.10909125"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install frontend deps
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: desktop
+        run: pnpm build
+
+      - name: Set version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          python3 - <<'EOF'
+          import json
+          version = "${{ github.ref_name }}".lstrip("v")
+          p = "desktop/src-tauri/tauri.conf.json"
+          with open(p, encoding="utf-8") as f:
+              conf = json.load(f)
+          conf["version"] = version
+          with open(p, "w", encoding="utf-8") as f:
+              json.dump(conf, f, indent=2)
+          EOF
+
+      - name: Initialize Android project (if missing)
+        working-directory: desktop
+        run: |
+          if [ ! -d src-tauri/gen/android ]; then
+            pnpm tauri android init
+          fi
+
+      # #4071: `tauri android init` scaffolds gen/android from the tauri-cli
+      # template, which ships the DEFAULT Tauri icon — the repo's
+      # icons/android mipmaps (VaultPilot logo) are never copied in, so every
+      # CI-built APK showed the default launcher icon. Overwrite the generated
+      # res/ with the repo icons before building.
+      - name: Sync Android launcher icons (VaultPilot logo)
+        working-directory: desktop
+        run: |
+          if [ -d src-tauri/icons/android ]; then
+            for d in src-tauri/icons/android/mipmap-*; do
+              [ -d "$d" ] && cp -r "$d"/. "src-tauri/gen/android/app/src/main/res/$(basename "$d")/"
+            done
+            cp src-tauri/icons/android/values/*.xml src-tauri/gen/android/app/src/main/res/values/ 2>/dev/null || true
+            echo "Synced Android launcher icons from src-tauri/icons/android"
+          else
+            echo "WARNING: src-tauri/icons/android missing — keeping template icon"
+          fi
+
+      # #4074: voice input (MediaRecorder) needs RECORD_AUDIO in the app
+      # manifest. The generated AndroidManifest.xml (from tauri-cli template)
+      # only declares INTERNET, so inject the permission here.
+      - name: Add RECORD_AUDIO permission for voice input
+        working-directory: desktop
+        run: |
+          MANIFEST=src-tauri/gen/android/app/src/main/AndroidManifest.xml
+          if [ ! -f "$MANIFEST" ]; then
+            echo "WARNING: AndroidManifest.xml not found, skipping permission inject"
+            exit 0
+          fi
+          if grep -q 'RECORD_AUDIO' "$MANIFEST"; then
+            echo "RECORD_AUDIO already present"
+          else
+            python3 - "$MANIFEST" <<'EOF'
+          import sys
+          p = sys.argv[1]
+          s = open(p, encoding="utf-8").read()
+          perm = '    <uses-permission android:name="android.permission.RECORD_AUDIO" />'
+          anchor = '    <uses-permission android:name="android.permission.INTERNET" />'
+          if perm not in s and anchor in s:
+              s = s.replace(anchor, anchor + "\n" + perm)
+              open(p, "w", encoding="utf-8").write(s)
+              print("Injected RECORD_AUDIO permission")
+          else:
+              print("WARNING: could not inject RECORD_AUDIO (anchor missing?)")
+          EOF
+          fi
+
+      - name: Build APK
+        working-directory: desktop
+        run: pnpm tauri android build --target ${{ matrix.abi }} --apk
+
+      # Sign the release APK with the FIXED production keystore from Secrets.
+      # 2026-08-13 事故：之前每次构建随机生成 keystore → 每个版本签名不同
+      # → Android 禁止不同签名覆盖安装 → 用户所有版本都装不上。
+      # 现在所有版本用同一个 keystore 签名，可正常升级安装。
+      # #4077: skip on pull_request runs — fork PRs get no secrets (empty
+      # keystore → decode guard fails the job) and same-repo PRs must not
+      # produce artifacts signed with the production key. Push/tag/dispatch
+      # builds keep signing (releases are tag-driven).
+      - name: Sign APK
+        if: github.event_name != 'pull_request'
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # `find | head -1` sends find a SIGPIPE (exit 141) under set -o
+          # pipefail when the glob matches >1 APK, failing builds spuriously
+          # even when signing succeeded (#4034, #4076). -print -quit exits after
+          # the first match without SIGPIPE.
+          APK=$(find desktop/src-tauri/gen/android -path '*/outputs/apk/*/release/*.apk' -print -quit)
+          if [ -z "$APK" ]; then
+            echo "FAILED: APK not found for signing"
+            exit 1
+          fi
+          KEYSTORE="$RUNNER_TEMP/release.keystore"
+          KS_PASS="${ANDROID_KEYSTORE_PASSWORD:-vaultpilot2026}"
+          ALIAS="${ANDROID_KEY_ALIAS:-vaultpilot}"
+          KEY_PASS="${ANDROID_KEY_PASSWORD:-vaultpilot2026}"
+
+          # Decode the fixed production keystore from Secrets.
+          echo "$ANDROID_KEYSTORE_B64" | base64 -d > "$KEYSTORE"
+          if [ ! -s "$KEYSTORE" ]; then
+            echo "FAILED: keystore decode empty"
+            exit 1
+          fi
+
+          # Locate apksigner (bundled with Android SDK build-tools).
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort | tail -1)
+          if [ -z "$APKSIGNER" ]; then
+            echo "FAILED: apksigner not found"
+            exit 1
+          fi
+
+          UNSIGNED="${APK%.apk}-unsigned.apk"
+          cp "$APK" "$UNSIGNED"
+          "$APKSIGNER" sign \
+            --ks "$KEYSTORE" \
+            --ks-pass "pass:$KS_PASS" \
+            --key-pass "pass:$KEY_PASS" \
+            --ks-key-alias "$ALIAS" \
+            --out "$APK" \
+            "$UNSIGNED"
+          rm -f "$UNSIGNED"
+          echo "Signed APK: $APK"
+
+          # Verify the signature actually landed — fail the build if not.
+          # Note: no `| head -5` here — under `set -o pipefail`, head closing
+          # the pipe early sends apksigner a SIGPIPE (exit 141) even when the
+          # signature is valid, making successful builds flake (#4034).
+          "$APKSIGNER" verify --print-certs "$APK"
+          echo "APK signature verified OK"
+
+      - name: Validate APK
+        run: |
+          # -print -quit instead of `| head -n 1` — same SIGPIPE flake as #4034/#4076.
+          APK=$(find desktop/src-tauri/gen/android -path '*/outputs/apk/*/release/*.apk' -print -quit)
+          if [ -z "$APK" ] || [ ! -f "$APK" ]; then
+            echo "FAILED: APK not found"
+            exit 1
+          fi
+          python3 - "$APK" <<'EOF'
+          import zipfile, os, sys
+          apk = sys.argv[1]
+          z = zipfile.ZipFile(apk)
+          names = z.namelist()
+          if "AndroidManifest.xml" not in names:
+              sys.exit("FAILED: Missing AndroidManifest.xml, got: " + str(names[:10]))
+          if not any("classes.dex" in n for n in names):
+              sys.exit("FAILED: Missing classes.dex, got: " + str(names[:10]))
+          size_mb = os.path.getsize(apk) / (1024 * 1024)
+          if not (1 < size_mb < 200):
+              sys.exit("FAILED: APK size {:.1f}MB is unreasonable".format(size_mb))
+          print("APK valid: {:.1f}MB, {} entries".format(size_mb, len(names)))
+          EOF
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vaultpilot-android-${{ matrix.abi }}-${{ github.sha }}
+          path: desktop/src-tauri/gen/android/**/outputs/apk/*/release/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    permissions:
+      contents: write
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download APK artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: vaultpilot-android-*-${{ github.sha }}
+
+      - name: Upload APKs to release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          # Same race hardening as windows-installers/release: three
+          # workflows create the same-tag release concurrently, so a 422
+          # "already exists" here is not an error.
+          if ! gh release view "$TAG" --json id > /dev/null 2>&1; then
+            gh release create "$TAG" --title "VaultPilot ${TAG#v}" --notes "" \
+              || echo "note: release already exists (concurrent workflow), continuing"
+          fi
+          # NOTE: gh's `file#name` rename syntax silently fails (asset keeps
+          # its original name `app-universal-release-unsigned.apk`), so 3 ABI
+          # builds uploaded under the SAME name overwrite each other — only
+          # the last (x86_64) survived, and ARM phones reported
+          # "app not compatible with this device" (#4066). Copy to distinct
+          # filenames and upload those instead.
+          retry_upload() {
+            local f="$1" attempt
+            for attempt in 1 2 3 4 5; do
+              if gh release upload "$TAG" "$f" --clobber; then
+                echo "Uploaded: $(basename "$f")"
+                return 0
+              fi
+              echo "Upload attempt $attempt/5 failed: $(basename "$f")"
+              sleep 10
+            done
+            echo "FAILED to upload after 5 attempts: $f" >&2
+            return 1
+          }
+          for apk in $(find vaultpilot-android-* -name '*.apk'); do
+            top=${apk%%/*}
+            abi=${top#vaultpilot-android-}
+            abi=${abi%%-*}
+            cp "$apk" "/tmp/VaultPilot-${abi}-${TAG}.apk"
+            retry_upload "/tmp/VaultPilot-${abi}-${TAG}.apk"
+          done
+          # Also upload a universal label pointing at the arm64 build so
+          # users who grab the first APK asset get a phone-installable file.
+          ARM64_APK=$(find vaultpilot-android-aarch64-* -name '*.apk' -print -quit)
+          if [ -n "$ARM64_APK" ]; then
+            cp "$ARM64_APK" "/tmp/VaultPilot-${TAG}-universal.apk"
+            retry_upload "/tmp/VaultPilot-${TAG}-universal.apk"
+          fi

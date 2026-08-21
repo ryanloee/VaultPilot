@@ -166,6 +166,8 @@ pub fn run() {
             commands::triggers::fire_trigger_rule_now,
             commands::triggers::toggle_trigger_rule,
             commands::triggers::delete_trigger_rule,
+            commands::triggers::delete_trigger_execution,
+            commands::triggers::clear_trigger_executions,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

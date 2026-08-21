@@ -189,6 +189,8 @@ export type TriggerExecution = {
   status: "success" | "failed" | string;
   error: string;
   detail: string;
+  /** Full AI answer text — stored inline in the DB, NOT as a vault note. */
+  resultContent: string;
 };
 
 // ── Agent status event (streamed during askWithAi / runAgent) ─────────────

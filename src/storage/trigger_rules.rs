@@ -305,10 +305,13 @@ pub struct TriggerExecutionRecord {
     pub status: String,
     pub error: String,
     pub detail: String,
+    /// Full AI answer text (stored inline — NOT as a vault note).
+    pub result_content: String,
 }
 
 /// List the most recent execution-log rows, newest first. This is the
 /// user-facing answer to "did my scheduled task actually run?".
+/// `result_content` carries the full AI answer inline.
 #[instrument(skip(context))]
 pub fn list_recent_trigger_executions_with_context(
     context: &StorageContext,
@@ -319,7 +322,7 @@ pub fn list_recent_trigger_executions_with_context(
 
     let mut stmt = connection.prepare(
         r#"
-        SELECT id, rule_id, label, action, fired_at, status, error, detail
+        SELECT id, rule_id, label, action, fired_at, status, error, detail, result_content
         FROM trigger_executions
         ORDER BY fired_at DESC
         LIMIT ?1
@@ -337,11 +340,28 @@ pub fn list_recent_trigger_executions_with_context(
                 status: row.get(5)?,
                 error: row.get(6)?,
                 detail: row.get(7)?,
+                result_content: row.get(8)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()
         .context("failed to collect trigger executions")?;
 
+    Ok(rows)
+}
+
+/// Delete a single execution-log row by ID. Returns `true` if deleted.
+#[instrument(skip(context))]
+pub fn delete_trigger_execution_with_context(context: &StorageContext, id: &str) -> Result<bool> {
+    let (connection, _) = open_connection(context)?;
+    let rows = connection.execute("DELETE FROM trigger_executions WHERE id = ?1", params![id])?;
+    Ok(rows > 0)
+}
+
+/// Clear ALL execution-log rows. Returns the number of deleted rows.
+#[instrument(skip(context))]
+pub fn clear_trigger_executions_with_context(context: &StorageContext) -> Result<usize> {
+    let (connection, _) = open_connection(context)?;
+    let rows = connection.execute("DELETE FROM trigger_executions", [])?;
     Ok(rows)
 }
 

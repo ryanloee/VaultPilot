@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "mimosa-finding-ledger-batch/v1",
+  "batchId": "stop-20260821T124434104Z-31720-69612a5909cc",
+  "runId": "20260821T124434104Z-31720-69612a5909cc",
+  "runStatus": "completed",
+  "coverage": {
+    "status": "complete",
+    "reasons": []
+  },
+  "source": {
+    "component": "zcode-hook",
+    "operationId": "Stop"
+  },
+  "revision": "7bda976c42df3ba23f862da09ace0e288f01d34a",
+  "diffHash": "1f77f434e4dbfcc3077f152aad2a2a389446e03143a94e382908d9102f8bda36",
+  "rulesVersion": "unavailable",
+  "sessionHash": "6cf9a23203d74cbee32de8a7ad79f951ea1ae313fb61933bdd32e8d7cade3e11",
+  "reportRef": ".mimosa/reports/task-review-sess_5783116f-0d62-454c-9739-a86a83821173-20260821T124434104Z-31720-69612a5909cc.json",
+  "events": [],
+  "observedFindingIds": [],
+  "verifiedFiles": [
+    {
+      "file": "desktop/src/lib/store.ts",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "desktop/src/lib/updater.ts",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "desktop/src/components/layout/StatusBar.tsx",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "desktop/src/components/settings/SettingsView.tsx",
+      "direct": "complete",
+      "projectContext": "partial"
+    }
+  ],
+  "recordedAt": "2026-08-21T12:44:34.552Z"
+}

@@ -49,13 +49,12 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::models::{NoteDocument, NoteMeta};
 use crate::orchestration::trigger::{
     AgentTriggerRule, ConditionContext, TriggerAction, TriggerKind,
 };
 use crate::storage::pool::open_connection;
 use crate::storage::trigger_rules::list_trigger_rules_with_context;
-use crate::storage::{save_note_with_context, StorageContext};
+use crate::storage::StorageContext;
 
 /// Default cadence at which the background executor scans for due rules.
 ///
@@ -337,8 +336,9 @@ fn load_enabled_cron_rules_with_last_fired(
 /// Record one execution of `rule` and update the rule's run metadata.
 ///
 /// `status` is `"success"` or `"failed"`; `error` is the error message
-/// (empty on success); `detail` is optional free-form context (e.g. the
-/// effective prompt that would have been sent).
+/// (empty on success); `detail` is optional free-form context (e.g. token
+/// counts); `result_content` stores the full AI answer inline (NOT as a note
+/// — trigger output must never pollute the vault).
 fn record_trigger_execution(
     context: &StorageContext,
     rule: &AgentTriggerRule,
@@ -346,6 +346,7 @@ fn record_trigger_execution(
     status: &str,
     error: &str,
     detail: &str,
+    result_content: &str,
 ) -> Result<()> {
     let (mut connection, _) = open_connection(context)?;
     let tx = connection.transaction()?;
@@ -353,9 +354,9 @@ fn record_trigger_execution(
     let fired_rfc = fired_at.to_rfc3339();
     let action_str = format!("{:?}", rule.action).to_lowercase();
     tx.execute(
-        "INSERT INTO trigger_executions (id, rule_id, label, action, fired_at, status, error, detail) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![exec_id, rule.id, rule.label, action_str, fired_rfc, status, error, detail],
+        "INSERT INTO trigger_executions (id, rule_id, label, action, fired_at, status, error, detail, result_content) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![exec_id, rule.id, rule.label, action_str, fired_rfc, status, error, detail, result_content],
     )
     .with_context(|| format!("failed to record execution for rule '{}'", rule.id))?;
     // Update rule run metadata.
@@ -450,7 +451,8 @@ pub fn fire_due_rules_at(context: &StorageContext, now: DateTime<Utc>) -> Result
         // or "failed"). The previous implementation passed the literal
         // "fired", which broke any downstream filter on `status = 'success'`
         // (WinUI Inspector, mobile surfaces, external dashboards).
-        let recorded = record_trigger_execution(context, d.rule, d.due_at, "success", "", &detail);
+        let recorded =
+            record_trigger_execution(context, d.rule, d.due_at, "success", "", &detail, "");
         match recorded {
             Ok(()) => {
                 outcome.fired += 1;
@@ -471,7 +473,7 @@ pub fn fire_due_rules_at(context: &StorageContext, now: DateTime<Utc>) -> Result
                 outcome.failed += 1;
                 let err_msg = format!("{e:#}");
                 let _ = record_trigger_execution(
-                    context, d.rule, d.due_at, "failed", &err_msg, &detail,
+                    context, d.rule, d.due_at, "failed", &err_msg, &detail, "",
                 );
                 warn!(rule_id = %d.rule.id, error = %e, "failed to record trigger execution");
             }
@@ -554,11 +556,13 @@ Today's date: {date}"#
 
 /// Outcome of dispatching one rule's action. `status` is `"success"` or
 /// `"failed"` — the same contract as the `trigger_executions.status` column
-/// (#3055).
+/// (#3055). `result_content` carries the full AI answer text (stored inline
+/// in the execution log — NOT as a vault note).
 pub struct ActionDispatch {
     pub status: &'static str,
     pub error: String,
     pub detail: String,
+    pub result_content: String,
 }
 
 impl ActionDispatch {
@@ -567,18 +571,19 @@ impl ActionDispatch {
             status: "failed",
             error,
             detail: String::new(),
+            result_content: String::new(),
         }
     }
 }
 
 /// Execute `rule`'s action: run the action prompt through the grounded AI
-/// pipeline (with vault search context) and save the answer as a vault note.
+/// pipeline (with vault search context) and return the answer text.
 ///
+/// The answer is stored inline in the `trigger_executions.result_content`
+/// column — trigger output must NEVER pollute the user's note vault.
 /// This is the "agent dispatch" half of a fire. It never panics and never
 /// returns `Err` — every failure mode (misconfigured action, AI error,
-/// timeout, note-save failure) is reported as an `ActionDispatch` with
-/// `status = "failed"` so the caller records it in the execution log instead
-/// of losing it.
+/// timeout) is reported as an `ActionDispatch` with `status = "failed"`.
 async fn dispatch_rule_action(
     context: &StorageContext,
     rule: &AgentTriggerRule,
@@ -591,6 +596,7 @@ async fn dispatch_rule_action(
                 status: "failed",
                 detail: format!("action={:?}", rule.action),
                 error: reason,
+                result_content: String::new(),
             };
         }
     };
@@ -623,63 +629,23 @@ async fn dispatch_rule_action(
     let tokens_out = answered.usage_output_tokens;
     let answer = answered.answer;
 
-    let action_str = format!("{:?}", rule.action).to_lowercase();
-    // Local wall-clock in the title — the executor's clock is UTC, which
-    // would label a 10:47 (UTC+8) fire as "02:47" and confuse the user.
-    let local_now = now.with_timezone(&chrono::Local);
-    let title = format!(
-        "[Trigger] {} — {}",
-        rule.label,
-        local_now.format("%Y-%m-%d %H:%M")
-    );
-    // NB: the source MUST be unique per fire. `save_note_with_context`
-    // performs source-based dedup (#3077) — a shared "trigger_rule" value
-    // made every fire OVERWRITE the previous result note instead of
-    // creating a new one, so the user only ever saw the latest fire.
-    let source = format!("trigger_rule:{}:{}", rule.id, now.timestamp());
-    let meta = NoteMeta {
-        title: title.clone(),
-        summary: answer.chars().take(300).collect(),
-        source,
-        tags: vec!["trigger".to_string(), action_str.clone()],
-        ..Default::default()
-    };
-    let body = format!(
-        "# {}\n\n{}\n\n---\n*Generated by trigger rule '{}' ({}) — {}*\n*Prompt: {}*",
-        title,
-        answer,
-        rule.label,
-        action_str,
-        local_now.to_rfc3339(),
-        truncate(&prompt, 200)
-    );
-    let note = NoteDocument {
-        meta,
-        body,
-        search_snippet: None,
-        search_score: None,
-    };
-
-    let ctx = context.clone();
-    match spawn_blocking(move || save_note_with_context(&ctx, note)).await {
-        Ok(Ok(saved)) => {
-            // Include token usage so "did this consume provider quota?" is
-            // answerable straight from the execution log.
-            let mut detail = format!("note_id={}", saved.meta.id);
-            if let Some(tokens_in) = tokens_in {
-                detail.push_str(&format!(" tokens_in={tokens_in}"));
-            }
-            if let Some(tokens_out) = tokens_out {
-                detail.push_str(&format!(" tokens_out={tokens_out}"));
-            }
-            ActionDispatch {
-                status: "success",
-                error: String::new(),
-                detail,
-            }
+    // Build detail: token usage for quota attribution.
+    let mut detail = String::new();
+    if let Some(tokens_in) = tokens_in {
+        detail.push_str(&format!("tokens_in={tokens_in}"));
+    }
+    if let Some(tokens_out) = tokens_out {
+        if !detail.is_empty() {
+            detail.push(' ');
         }
-        Ok(Err(e)) => ActionDispatch::failed(format!("failed to save result note: {e}")),
-        Err(e) => ActionDispatch::failed(format!("save task join error: {e}")),
+        detail.push_str(&format!("tokens_out={tokens_out}"));
+    }
+
+    ActionDispatch {
+        status: "success",
+        error: String::new(),
+        detail,
+        result_content: answer,
     }
 }
 
@@ -717,9 +683,18 @@ pub async fn fire_trigger_rule_now(
     let status = dispatch.status;
     let error = dispatch.error.clone();
     let detail = dispatch.detail.clone();
+    let result_content = dispatch.result_content.clone();
     let ctx = context.clone();
     let _ = spawn_blocking(move || {
-        record_trigger_execution(&ctx, &rule, Utc::now(), status, &error, &detail)
+        record_trigger_execution(
+            &ctx,
+            &rule,
+            Utc::now(),
+            status,
+            &error,
+            &detail,
+            &result_content,
+        )
     })
     .await;
     Ok(Some(dispatch))
@@ -798,8 +773,17 @@ pub async fn fire_due_rules_with_dispatch(
         let due_at = d.due_at;
         let error_for_log = error.clone();
         let detail_for_log = detail.clone();
+        let result_for_log = dispatch.result_content.clone();
         let recorded = spawn_blocking(move || {
-            record_trigger_execution(&ctx, &rule, due_at, status, &error, &detail)
+            record_trigger_execution(
+                &ctx,
+                &rule,
+                due_at,
+                status,
+                &error,
+                &detail,
+                &result_for_log,
+            )
         })
         .await
         .map_err(|e| anyhow::anyhow!("record task panicked: {e}"))?;
@@ -1525,6 +1509,7 @@ mod tests {
             "failed",
             "simulated DB error",
             "test detail",
+            "",
         )
         .expect("record failed execution");
 

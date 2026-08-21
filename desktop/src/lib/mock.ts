@@ -360,7 +360,8 @@ export const mockApi = {
         firedAt: now(),
         status: "success",
         error: "",
-        detail: "note_id=mock-note-1",
+        detail: "tokens_in=1000 tokens_out=200",
+        resultContent: "这是AI生成的每日回顾结果内容…",
       },
       {
         id: "mock-exec-2",
@@ -371,10 +372,13 @@ export const mockApi = {
         status: "failed",
         error: "AI execution failed: no API key configured",
         detail: "",
+        resultContent: "",
       },
     ];
     return typeof limit === "number" ? rows.slice(0, limit) : rows;
   },
+  deleteTriggerExecution: async (_executionId: string): Promise<boolean> => true,
+  clearTriggerExecutions: async (): Promise<number> => 2,
   createTriggerRule: async (
     label: string,
     triggerType: string,

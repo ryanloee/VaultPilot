@@ -1,14 +1,14 @@
 {
   "schemaVersion": "mimosa-hook-status/v1",
-  "recordedAt": "2026-08-21T12:42:11.996Z",
+  "recordedAt": "2026-08-21T12:53:32.750Z",
   "sessionId": "sess_5783116f-0d62-454c-9739-a86a83821173",
   "event": "PostToolUse",
   "toolName": "Edit",
-  "file": "desktop/src/components/settings/SettingsView.tsx",
+  "file": "desktop/src/components/triggers/TriggerView.tsx",
   "outcome": "clear",
   "coverage": "complete",
   "findingCount": 0,
-  "durationMs": 11,
+  "durationMs": 12,
   "hostState": "hook_complete",
   "reportHint": ".mimosa/reports/"
 }

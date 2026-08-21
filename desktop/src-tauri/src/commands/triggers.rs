@@ -87,6 +87,7 @@ pub struct TriggerExecutionDto {
     pub status: String,
     pub error: String,
     pub detail: String,
+    pub result_content: String,
 }
 
 impl From<vaultpilot_lib::storage::TriggerExecutionRecord> for TriggerExecutionDto {
@@ -100,8 +101,42 @@ impl From<vaultpilot_lib::storage::TriggerExecutionRecord> for TriggerExecutionD
             status: r.status,
             error: r.error,
             detail: r.detail,
+            result_content: r.result_content,
         }
     }
+}
+
+/// Delete a single execution-log row.
+#[tauri::command]
+pub async fn delete_trigger_execution(
+    state: tauri::State<'_, AppState>,
+    execution_id: String,
+) -> Result<bool, String> {
+    let ctx = state.storage.clone();
+    initialize_storage_async(&ctx)
+        .await
+        .map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || {
+        vaultpilot_lib::storage::delete_trigger_execution_with_context(&ctx, &execution_id)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Clear ALL execution-log rows.
+#[tauri::command]
+pub async fn clear_trigger_executions(state: tauri::State<'_, AppState>) -> Result<usize, String> {
+    let ctx = state.storage.clone();
+    initialize_storage_async(&ctx)
+        .await
+        .map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || {
+        vaultpilot_lib::storage::clear_trigger_executions_with_context(&ctx)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.33] - 2026-08-21
+
+### Fixed
+- CI: `drain_collect` + `chunks_exact_to_as_chunks` — two pre-existing lints in `bases.rs` / `settings.rs` that only surfaced under Rust 1.98.0 stable (used by GitHub Actions).
+
 ## [0.7.32] - 2026-08-21
 
 ### Added

@@ -176,7 +176,8 @@ export const tauriApi = {
     triggerConfig: string,
     action: string,
     filter?: string,
-    customPrompt?: string
+    customPrompt?: string,
+    providerName?: string
   ) =>
     invoke<TriggerRule>("create_trigger_rule", {
       label,
@@ -185,6 +186,7 @@ export const tauriApi = {
       action,
       filter,
       customPrompt,
+      providerName,
     }),
   toggleTriggerRule: (ruleId: string) =>
     invoke<boolean>("toggle_trigger_rule", { ruleId }),
@@ -202,7 +204,8 @@ export const tauriApi = {
     triggerConfig: string,
     action: string,
     filter?: string,
-    customPrompt?: string
+    customPrompt?: string,
+    providerName?: string
   ) =>
     invoke<TriggerRule>("update_trigger_rule", {
       ruleId,
@@ -212,6 +215,7 @@ export const tauriApi = {
       action,
       filter,
       customPrompt,
+      providerName,
     }),
 };
 

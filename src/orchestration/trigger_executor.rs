@@ -606,10 +606,11 @@ async fn dispatch_rule_action(
         crate::ask_with_ai_with_context(
             context,
             prompt.clone(),
-            None,      // no conversation history
-            None,      // no images
-            None,      // no model override
-            |_, _| {}, // suppress progress events
+            None,                          // no conversation history
+            None,                          // no images
+            None,                          // no model override
+            rule.provider_name.as_deref(), // per-rule provider selection
+            |_, _| {},                     // suppress progress events
         ),
     )
     .await
@@ -928,6 +929,7 @@ mod tests {
             action,
             enabled: true,
             custom_prompt: None,
+            provider_name: None,
             conditions: vec![],
         }
     }
@@ -1043,6 +1045,7 @@ mod tests {
             action: TriggerAction::SummarizeAndTag,
             enabled: true,
             custom_prompt: None,
+            provider_name: None,
             conditions: vec![],
         };
         assert!(!is_rule_due(&rule, None, fixed_time()));
@@ -1126,6 +1129,7 @@ mod tests {
             "daily_review",
             None,
             None,
+            None,
         )
         .expect("create rule");
         let now = fixed_time();
@@ -1184,6 +1188,7 @@ mod tests {
             "daily_review",
             None,
             None,
+            None,
         )
         .expect("create cron");
         let event_rule = create_trigger_rule_with_context(
@@ -1192,6 +1197,7 @@ mod tests {
             "event",
             "note_created",
             "summarize_and_tag",
+            None,
             None,
             None,
         )
@@ -1245,6 +1251,7 @@ mod tests {
             "cron",
             "0 9 * * *",
             "daily_review",
+            None,
             None,
             None,
         )
@@ -1402,6 +1409,7 @@ mod tests {
             "daily_review",
             None,
             None,
+            None,
         )
         .expect("create rule");
         let outcome = fire_due_rules_at(&ctx, fixed_time()).expect("fire step");
@@ -1497,6 +1505,7 @@ mod tests {
             "cron",
             "0 9 * * *",
             "daily_review",
+            None,
             None,
             None,
         )
@@ -1623,6 +1632,7 @@ mod tests {
             "daily_review",
             None,
             None,
+            None,
         )
         .expect("create rule");
 
@@ -1672,6 +1682,7 @@ mod tests {
             "daily_review",
             None,
             None,
+            None,
         )
         .expect("create rule");
 
@@ -1708,6 +1719,7 @@ mod tests {
             "daily_review",
             None,
             None,
+            None,
         )
         .expect("create rule");
 
@@ -1730,6 +1742,7 @@ mod tests {
             "cron",
             "0 9 * * *",
             "daily_review",
+            None,
             None,
             None,
         )
@@ -1836,6 +1849,7 @@ mod tests {
             "custom",
             None,
             Some("Summarize recent notes"),
+            None,
         )
         .expect("create rule");
 
@@ -1887,6 +1901,7 @@ mod tests {
             "cron",
             "0 9 * * *",
             "daily_review",
+            None,
             None,
             None,
         )

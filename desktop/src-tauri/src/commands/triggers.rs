@@ -18,6 +18,7 @@ pub struct TriggerRuleDto {
     pub action: String,
     pub enabled: bool,
     pub custom_prompt: Option<String>,
+    pub provider_name: Option<String>,
     /// Scheduler status so the UI can answer "did it fire, and did it work?".
     #[serde(default)]
     pub last_fired_at: Option<String>,
@@ -68,6 +69,7 @@ impl TriggerRuleDto {
             action: format!("{:?}", r.action).to_lowercase(),
             enabled: r.enabled,
             custom_prompt: r.custom_prompt,
+            provider_name: r.provider_name,
             last_fired_at: s.last_fired_at,
             next_fire_at: s.next_fire_at,
             run_count: s.run_count,
@@ -182,6 +184,7 @@ pub async fn list_trigger_executions(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn create_trigger_rule(
     state: tauri::State<'_, AppState>,
     label: String,
@@ -190,6 +193,7 @@ pub async fn create_trigger_rule(
     action: String,
     filter: Option<String>,
     custom_prompt: Option<String>,
+    provider_name: Option<String>,
 ) -> Result<TriggerRuleDto, String> {
     let ctx = state.storage.clone();
     initialize_storage_async(&ctx)
@@ -204,6 +208,7 @@ pub async fn create_trigger_rule(
             &action,
             filter.as_deref(),
             custom_prompt.as_deref(),
+            provider_name.as_deref(),
         )
         .map(TriggerRuleDto::from)
         .map_err(|e| e.to_string())
@@ -223,6 +228,7 @@ pub async fn update_trigger_rule(
     action: String,
     filter: Option<String>,
     custom_prompt: Option<String>,
+    provider_name: Option<String>,
 ) -> Result<TriggerRuleDto, String> {
     let ctx = state.storage.clone();
     initialize_storage_async(&ctx)
@@ -238,6 +244,7 @@ pub async fn update_trigger_rule(
             &action,
             filter.as_deref(),
             custom_prompt.as_deref(),
+            provider_name.as_deref(),
         )
         .map_err(|e| e.to_string())?
         .map(TriggerRuleDto::from)

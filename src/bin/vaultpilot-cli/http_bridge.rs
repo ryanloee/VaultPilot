@@ -2973,6 +2973,7 @@ async fn http_chat_completions(
                 Some(image_paths)
             },
             None,
+            None,
             |_, _| (),
         )
         .await

@@ -39,6 +39,10 @@ pub struct AgentTriggerRule {
     /// output when `None` for backward compatibility (#2842).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_prompt: Option<String>,
+    /// Provider name from settings.providers to use for this rule's AI call.
+    /// `None` = use the currently active provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_name: Option<String>,
     /// Optional conditions that must be satisfied for this rule to fire.
     /// Evaluated when the trigger fires. All conditions must match.
     /// Empty (default) means unconditional — always fire when triggered.
@@ -399,6 +403,7 @@ mod tests {
             action: TriggerAction::DailyReview,
             enabled: true,
             custom_prompt: None,
+            provider_name: None,
             conditions: vec![],
         };
         let json = serde_json::to_string(&rule).unwrap();
@@ -420,6 +425,7 @@ mod tests {
             action: TriggerAction::Custom,
             enabled: true,
             custom_prompt: Some("Summarize the meeting notes for {{date}}".into()),
+            provider_name: None,
             conditions: vec![],
         };
 
@@ -449,6 +455,7 @@ mod tests {
             action: TriggerAction::DailyReview,
             enabled: true,
             custom_prompt: None,
+            provider_name: None,
             conditions: vec![],
         };
         assert_eq!(daily.effective_prompt(), None);
@@ -625,6 +632,7 @@ mod tests {
             action: TriggerAction::DailyReview,
             enabled: true,
             custom_prompt: None,
+            provider_name: None,
             conditions: vec![],
         };
         // Empty conditions means unconditional.
@@ -642,6 +650,7 @@ mod tests {
             action: TriggerAction::SummarizeAndTag,
             enabled: true,
             custom_prompt: None,
+            provider_name: None,
             conditions: vec![Condition::TagContains {
                 tag: "urgent".into(),
             }],
@@ -664,6 +673,7 @@ mod tests {
             action: TriggerAction::SummarizeAndTag,
             enabled: true,
             custom_prompt: None,
+            provider_name: None,
             conditions: vec![
                 Condition::TagContains {
                     tag: "urgent".into(),
@@ -869,6 +879,7 @@ mod tests {
             action: TriggerAction::DailyReview,
             enabled: true,
             custom_prompt: None,
+            provider_name: None,
             conditions: vec![],
         };
         let json = serde_json::to_string(&rule).unwrap();
@@ -890,6 +901,7 @@ mod tests {
             action: TriggerAction::Custom,
             enabled: true,
             custom_prompt: Some("Process urgent notes".into()),
+            provider_name: None,
             conditions: vec![Condition::TagContains {
                 tag: "urgent".into(),
             }],

@@ -3102,6 +3102,7 @@ async fn handle_command(context: &StorageContext, cli: &Cli) -> Result<Value> {
                 parsed_history,
                 images,
                 None,
+                None, // no provider override
                 |_, _| (),
             )
             .await;
@@ -8085,6 +8086,7 @@ fn handle_trigger(context: &StorageContext, action: &TriggerActions) -> Result<V
                 action,
                 filter.as_deref(),
                 prompt.as_deref(),
+                None, // no provider override (CLI)
             )?;
             Ok(serde_json::json!({
                 "created": true,
@@ -12487,6 +12489,7 @@ async fn handle_skill(context: &StorageContext, action: &SkillActions) -> Result
                 None, // no history
                 None, // no images
                 None, // no model override
+                None, // no provider override
                 |_, _| (),
             )
             .await?;
@@ -12710,6 +12713,7 @@ async fn handle_skill_saved(context: &StorageContext, action: &SkillSavedActions
                 None, // no history
                 None, // no images
                 None, // no model override
+                None, // no provider override
                 |_, _| (),
             )
             .await?;

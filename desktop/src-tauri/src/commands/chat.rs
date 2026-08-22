@@ -86,6 +86,7 @@ pub async fn ask_with_ai(
         history,
         image_paths,
         model_override,
+        None, // no provider override for chat
         |stage, detail| {
             // Fan out progress to the frontend via a Tauri event. Best-effort:
             // a closed window just drops the emission.

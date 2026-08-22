@@ -631,6 +631,10 @@ fn ensure_trigger_rule_columns(connection: &Connection) -> Result<()> {
             "conditions",
             "ALTER TABLE trigger_rules ADD COLUMN conditions TEXT NOT NULL DEFAULT '[]'",
         ),
+        (
+            "provider_name",
+            "ALTER TABLE trigger_rules ADD COLUMN provider_name TEXT NOT NULL DEFAULT ''",
+        ),
     ] {
         if !columns.contains(column) {
             connection.execute_batch(ddl)?;

@@ -331,6 +331,7 @@ Please provide a comprehensive response with:
         None,      // no history
         None,      // no images
         None,      // no model override
+        None,      // no provider override
         |_, _| {}, // suppress status events
     )
     .await?;

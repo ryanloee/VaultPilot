@@ -170,6 +170,8 @@ export type TriggerRule = {
   action: string;
   enabled: boolean;
   customPrompt?: string;
+  /** Provider name from settings.providers — null = use active provider. */
+  providerName?: string;
   /** Scheduler status — answers "did it fire, and did it work?" */
   lastFiredAt?: string;
   nextFireAt?: string;

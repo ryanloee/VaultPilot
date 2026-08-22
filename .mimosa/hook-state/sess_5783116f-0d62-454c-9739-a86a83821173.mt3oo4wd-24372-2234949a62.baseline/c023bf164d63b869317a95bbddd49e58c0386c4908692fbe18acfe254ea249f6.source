@@ -89,6 +89,7 @@ pub async fn chat_with_ai_with_context(
             Some(images)
         },
         None,
+        None,
         |stage, detail| emit_status(stage, detail),
     )
     .await?;

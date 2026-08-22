@@ -61,9 +61,27 @@ pub async fn ask_with_ai_with_context(
     history: Option<Vec<ConversationTurn>>,
     image_paths: Option<Vec<String>>,
     model_override: Option<String>,
+    provider_name_override: Option<&str>,
     mut emit_status: impl FnMut(&str, String),
 ) -> Result<GroundedAnswer, anyhow::Error> {
     let mut settings = initialize_storage_async(context).await?;
+    // Trigger rules can select a specific provider by name — override the
+    // active provider for this request only (settings on disk are untouched).
+    if let Some(name) = provider_name_override.filter(|n| !n.trim().is_empty()) {
+        match settings
+            .providers
+            .iter()
+            .position(|p| p.name.trim() == name.trim())
+        {
+            Some(idx) => {
+                tracing::info!(provider = %name.trim(), index = idx, "provider override applied");
+                settings.active_provider_index = idx;
+            }
+            None => {
+                tracing::warn!(provider = %name.trim(), "provider override not found, using active provider");
+            }
+        }
+    }
     if let Some(model) = model_override.filter(|m| !m.trim().is_empty()) {
         settings.effective_provider_mut().model = model;
     }

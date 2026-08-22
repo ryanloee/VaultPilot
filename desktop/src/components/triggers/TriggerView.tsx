@@ -222,6 +222,26 @@ export function TriggerView() {
   const [expandedExecId, setExpandedExecId] = useState<string | null>(null);
   /** Loaded note body for the expanded execution. */
   const [expandedNoteBody, setExpandedNoteBody] = useState<string | null>(null);
+  /** Selected provider name (empty = use active provider). */
+  const [providerName, setProviderName] = useState("");
+  /** Available providers from settings (loaded once on mount). */
+  const [providers, setProviders] = useState<{ name: string; model: string }[]>([]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const settings = await api.getSettings();
+        setProviders(
+          (settings.providers ?? []).map((p: { name: string; model: string }) => ({
+            name: p.name,
+            model: p.model,
+          }))
+        );
+      } catch {
+        // Settings not loadable — the dropdown just shows "默认".
+      }
+    })();
+  }, []);
 
   const formOpen = addOpen || editingRule !== null;
   /** Event rules keep their trigger config in this UI — only cron schedules
@@ -280,6 +300,7 @@ export function TriggerView() {
     setCustomDays([1, 2, 3, 4, 5]);
     setNewAction("daily_review");
     setNewPrompt("");
+    setProviderName("");
   };
 
   /** Open the form pre-filled with an existing rule. */
@@ -296,6 +317,7 @@ export function TriggerView() {
     }
     setNewAction(rule.action);
     setNewPrompt(rule.customPrompt ?? "");
+    setProviderName(rule.providerName ?? "");
   };
 
   const handleSave = async () => {
@@ -303,6 +325,7 @@ export function TriggerView() {
     setCreating(true);
     try {
       const prompt = newAction === "custom" ? newPrompt.trim() || undefined : undefined;
+      const pn = providerName.trim() || undefined;
       if (editingRule) {
         await api.updateTriggerRule(
           editingRule.id,
@@ -311,10 +334,11 @@ export function TriggerView() {
           editingEvent ? editingRule.triggerConfig : cronExpr,
           newAction,
           editingEvent ? editingRule.filter : undefined,
-          prompt
+          prompt,
+          pn
         );
       } else {
-        await api.createTriggerRule(newLabel.trim(), "cron", cronExpr, newAction, undefined, prompt);
+        await api.createTriggerRule(newLabel.trim(), "cron", cronExpr, newAction, undefined, prompt, pn);
       }
       resetForm();
       await load();
@@ -516,6 +540,23 @@ export function TriggerView() {
             ))}
           </select>
 
+          {/* Provider selection — each rule can use a different LLM. */}
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">使用供应商</label>
+            <select
+              value={providerName}
+              onChange={(e) => setProviderName(e.target.value)}
+              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+            >
+              <option value="">默认（当前活跃供应商）</option>
+              {providers.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.name}（{p.model}）
+                </option>
+              ))}
+            </select>
+          </div>
+
           {newAction === "custom" && (
             <Textarea
               value={newPrompt}
@@ -574,6 +615,7 @@ export function TriggerView() {
                 {rule.triggerType === "cron" ? cronToLabel(rule.triggerConfig) : `📡 ${rule.triggerConfig}`}
                 {" · "}
                 {ACTION_LABELS[rule.action] ?? rule.action}
+                {rule.providerName ? ` · 🏷 ${rule.providerName}` : ""}
               </div>
               {rule.triggerType === "cron" && (
                 <div

@@ -394,7 +394,8 @@ export const mockApi = {
     triggerConfig: string,
     action: string,
     filter?: string,
-    customPrompt?: string
+    customPrompt?: string,
+    providerName?: string
   ): Promise<TriggerRule> => ({
     id: `mock-trigger-${Date.now()}`,
     label,
@@ -404,6 +405,7 @@ export const mockApi = {
     action,
     enabled: true,
     customPrompt,
+    providerName,
   }),
   toggleTriggerRule: async (_ruleId: string): Promise<boolean> => true,
   deleteTriggerRule: async (_ruleId: string): Promise<boolean> => true,
@@ -421,7 +423,8 @@ export const mockApi = {
     triggerConfig: string,
     action: string,
     filter?: string,
-    customPrompt?: string
+    customPrompt?: string,
+    providerName?: string
   ): Promise<TriggerRule> => ({
     id: ruleId,
     label,
@@ -431,6 +434,7 @@ export const mockApi = {
     action,
     enabled: true,
     customPrompt,
+    providerName,
   }),
 } as const;
 

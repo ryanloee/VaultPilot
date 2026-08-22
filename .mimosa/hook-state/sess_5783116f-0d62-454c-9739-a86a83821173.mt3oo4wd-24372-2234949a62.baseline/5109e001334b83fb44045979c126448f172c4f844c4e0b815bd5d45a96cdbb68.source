@@ -1911,6 +1911,7 @@ async fn mcp_call_chat_send(context: &StorageContext, arguments: Value) -> Value
                 Some(prepared.images.clone())
             },
             None,
+            None,
             |_, _| (),
         ),
     )
@@ -2714,7 +2715,7 @@ async fn mcp_call_ask(context: &StorageContext, arguments: Value) -> Value {
     };
     match tokio::time::timeout(
         AI_CALL_TIMEOUT,
-        ask_with_ai_with_context(context, question, None, None, None, |_, _| ()),
+        ask_with_ai_with_context(context, question, None, None, None, None, |_, _| ()),
     )
     .await
     {

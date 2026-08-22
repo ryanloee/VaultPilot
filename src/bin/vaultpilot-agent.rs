@@ -644,6 +644,7 @@ async fn handle_request(
                 params.history,
                 params.image_paths,
                 params.model_override,
+                None, // no provider override
                 |stage, detail| {
                     writer.write_line(
                         &serde_json::to_string(&AgentEvent {

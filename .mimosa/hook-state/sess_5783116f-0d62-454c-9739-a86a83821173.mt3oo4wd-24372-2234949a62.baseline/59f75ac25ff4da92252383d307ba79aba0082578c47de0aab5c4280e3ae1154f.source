@@ -30,6 +30,7 @@ pub fn create_trigger_rule_with_context(
     action: &str,         // TriggerAction variant name
     filter: Option<&str>, // optional tag/content filter for event triggers
     custom_prompt: Option<&str>,
+    provider_name: Option<&str>,
 ) -> Result<AgentTriggerRule> {
     validate_trigger_config(trigger_type, trigger_config)?;
     let (connection, _) = open_connection(context)?;
@@ -38,8 +39,8 @@ pub fn create_trigger_rule_with_context(
     let enabled: i32 = 1;
 
     connection.execute(
-        "INSERT INTO trigger_rules (id, label, trigger_type, trigger_config, filter, action, enabled, custom_prompt, created_at, updated_at, conditions) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-        params![id, label, trigger_type, trigger_config, filter, action, enabled, custom_prompt, now, now, "[]"],
+        "INSERT INTO trigger_rules (id, label, trigger_type, trigger_config, filter, action, enabled, custom_prompt, provider_name, created_at, updated_at, conditions) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![id, label, trigger_type, trigger_config, filter, action, enabled, custom_prompt, provider_name.unwrap_or(""), now, now, "[]"],
     ).with_context(|| format!("failed to create trigger rule '{label}'"))?;
 
     Ok(build_rule(
@@ -51,6 +52,7 @@ pub fn create_trigger_rule_with_context(
         action,
         enabled != 0,
         custom_prompt,
+        provider_name,
         &now,
         &now,
         None,
@@ -64,7 +66,7 @@ pub fn list_trigger_rules_with_context(context: &StorageContext) -> Result<Vec<A
 
     let mut stmt = connection.prepare(
         r#"
-        SELECT id, label, trigger_type, trigger_config, filter, action, enabled, custom_prompt, created_at, updated_at, conditions
+        SELECT id, label, trigger_type, trigger_config, filter, action, enabled, custom_prompt, provider_name, created_at, updated_at, conditions
         FROM trigger_rules
         ORDER BY created_at DESC
         "#,
@@ -80,9 +82,10 @@ pub fn list_trigger_rules_with_context(context: &StorageContext) -> Result<Vec<A
             let action: String = row.get(5)?;
             let enabled: i32 = row.get(6)?;
             let custom_prompt: Option<String> = row.get(7)?;
-            let created_at: String = row.get(8)?;
-            let updated_at: String = row.get(9)?;
-            let conditions: Option<String> = row.get(10)?;
+            let provider_name: Option<String> = row.get(8)?;
+            let created_at: String = row.get(9)?;
+            let updated_at: String = row.get(10)?;
+            let conditions: Option<String> = row.get(11)?;
             Ok(build_rule(
                 &id,
                 &label,
@@ -92,6 +95,7 @@ pub fn list_trigger_rules_with_context(context: &StorageContext) -> Result<Vec<A
                 &action,
                 enabled != 0,
                 custom_prompt.as_deref(),
+                provider_name.as_deref(),
                 &created_at,
                 &updated_at,
                 conditions.as_deref(),
@@ -113,7 +117,7 @@ pub fn get_trigger_rule_with_context(
 
     let mut stmt = connection.prepare(
         r#"
-        SELECT id, label, trigger_type, trigger_config, filter, action, enabled, custom_prompt, created_at, updated_at, conditions
+        SELECT id, label, trigger_type, trigger_config, filter, action, enabled, custom_prompt, provider_name, created_at, updated_at, conditions
         FROM trigger_rules
         WHERE id = ?1
         "#,
@@ -129,9 +133,10 @@ pub fn get_trigger_rule_with_context(
             let action: String = row.get(5)?;
             let enabled: i32 = row.get(6)?;
             let custom_prompt: Option<String> = row.get(7)?;
-            let created_at: String = row.get(8)?;
-            let updated_at: String = row.get(9)?;
-            let conditions: Option<String> = row.get(10)?;
+            let provider_name: Option<String> = row.get(8)?;
+            let created_at: String = row.get(9)?;
+            let updated_at: String = row.get(10)?;
+            let conditions: Option<String> = row.get(11)?;
             Ok(build_rule(
                 &id,
                 &label,
@@ -141,6 +146,7 @@ pub fn get_trigger_rule_with_context(
                 &action,
                 enabled != 0,
                 custom_prompt.as_deref(),
+                provider_name.as_deref(),
                 &created_at,
                 &updated_at,
                 conditions.as_deref(),
@@ -182,6 +188,7 @@ pub fn update_trigger_rule_with_context(
     action: &str,
     filter: Option<&str>,
     custom_prompt: Option<&str>,
+    provider_name: Option<&str>,
 ) -> Result<Option<AgentTriggerRule>> {
     validate_trigger_config(trigger_type, trigger_config)?;
     let (connection, _) = open_connection(context)?;
@@ -190,8 +197,8 @@ pub fn update_trigger_rule_with_context(
         .execute(
             "UPDATE trigger_rules \
              SET label = ?1, trigger_type = ?2, trigger_config = ?3, filter = ?4, \
-                 action = ?5, custom_prompt = ?6, updated_at = ?7 \
-             WHERE id = ?8",
+                 action = ?5, custom_prompt = ?6, provider_name = ?7, updated_at = ?8 \
+             WHERE id = ?9",
             params![
                 label,
                 trigger_type,
@@ -199,6 +206,7 @@ pub fn update_trigger_rule_with_context(
                 filter,
                 action,
                 custom_prompt,
+                provider_name.unwrap_or(""),
                 now,
                 id
             ],
@@ -240,7 +248,7 @@ pub fn list_trigger_rules_with_status_with_context(
 
     let mut stmt = connection.prepare(
         r#"
-        SELECT id, label, trigger_type, trigger_config, filter, action, enabled, custom_prompt,
+        SELECT id, label, trigger_type, trigger_config, filter, action, enabled, custom_prompt, provider_name,
                created_at, updated_at, conditions,
                last_fired_at, next_fire_at, run_count, last_status, last_error
         FROM trigger_rules
@@ -259,17 +267,18 @@ pub fn list_trigger_rules_with_status_with_context(
                 &row.get::<_, String>(5)?,
                 row.get::<_, i32>(6)? != 0,
                 row.get::<_, Option<String>>(7)?.as_deref(),
-                &row.get::<_, String>(8)?,
+                row.get::<_, Option<String>>(8)?.as_deref(),
                 &row.get::<_, String>(9)?,
-                row.get::<_, Option<String>>(10)?.as_deref(),
+                &row.get::<_, String>(10)?,
+                row.get::<_, Option<String>>(11)?.as_deref(),
             );
             let non_empty = |v: Option<String>| v.filter(|s| !s.is_empty());
             let mut status = TriggerRuleStatus {
-                last_fired_at: non_empty(row.get(11)?),
-                next_fire_at: non_empty(row.get(12)?),
-                run_count: row.get(13)?,
-                last_status: non_empty(row.get(14)?),
-                last_error: non_empty(row.get(15)?),
+                last_fired_at: non_empty(row.get(12)?),
+                next_fire_at: non_empty(row.get(13)?),
+                run_count: row.get(14)?,
+                last_status: non_empty(row.get(15)?),
+                last_error: non_empty(row.get(16)?),
             };
             // The stored `next_fire_at` column is only recomputed on fire, so
             // it goes stale when a rule is edited (and is empty for
@@ -427,6 +436,7 @@ fn validate_trigger_config(trigger_type: &str, trigger_config: &str) -> Result<(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn build_rule(
     id: &str,
     label: &str,
@@ -436,6 +446,7 @@ fn build_rule(
     action: &str,
     enabled: bool,
     custom_prompt: Option<&str>,
+    provider_name: Option<&str>,
     _created_at: &str,
     _updated_at: &str,
     conditions_json: Option<&str>,
@@ -463,6 +474,9 @@ fn build_rule(
         action: parsed_action,
         enabled,
         custom_prompt: custom_prompt.map(|s| s.to_string()),
+        provider_name: provider_name
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.to_string()),
         conditions,
     }
 }
@@ -504,6 +518,7 @@ mod tests {
             "daily_review",
             None,
             None,
+            None,
         )
         .expect("create rule");
         assert_eq!(rule.label, "Morning Review");
@@ -525,6 +540,7 @@ mod tests {
             "note_created",
             "summarize_and_tag",
             Some("tags CONTAINS meeting"),
+            None,
             None,
         )
         .expect("create event rule");
@@ -551,6 +567,7 @@ mod tests {
             "custom",
             None,
             Some("Summarize last week's notes"),
+            None,
         )
         .expect("create custom rule");
 
@@ -568,6 +585,7 @@ mod tests {
             "cron",
             "0 0 * * *",
             "daily_review",
+            None,
             None,
             None,
         )
@@ -590,6 +608,7 @@ mod tests {
             "cron",
             "0 0 * * *",
             "daily_review",
+            None,
             None,
             None,
         )
@@ -632,6 +651,7 @@ mod tests {
             "daily_review",
             None,
             None,
+            None,
         )
         .expect("create rule");
 
@@ -644,6 +664,7 @@ mod tests {
             "custom",
             None,
             Some("Summarize the workday"),
+            None,
         )
         .expect("update rule")
         .expect("rule should exist");
@@ -691,6 +712,7 @@ mod tests {
             "cron",
             "0 8 * * *",
             "daily_review",
+            None,
             None,
             None,
         )
@@ -745,6 +767,7 @@ mod tests {
             "cron",
             "0 9 * * *",
             "daily_review",
+            None,
             None,
             None,
         )
@@ -803,6 +826,7 @@ mod tests {
             "daily_review",
             None,
             None,
+            None,
         )
         .expect("create rule");
 
@@ -841,6 +865,7 @@ mod tests {
             "cron",
             "0 9 * * *",
             "daily_review",
+            None,
             None,
             None,
         )
@@ -899,6 +924,7 @@ mod tests {
             "cron",
             "0 9 * * *",
             "daily_review",
+            None,
             None,
             None,
         )

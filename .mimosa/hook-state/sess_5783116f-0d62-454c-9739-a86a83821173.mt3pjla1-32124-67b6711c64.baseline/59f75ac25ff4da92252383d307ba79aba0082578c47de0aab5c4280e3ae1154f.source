@@ -22,6 +22,7 @@ use super::StorageContext;
 
 /// Create a new trigger rule. Returns the created rule.
 #[instrument(skip(context))]
+#[allow(clippy::too_many_arguments)]
 pub fn create_trigger_rule_with_context(
     context: &StorageContext,
     label: &str,
@@ -436,7 +437,6 @@ fn validate_trigger_config(trigger_type: &str, trigger_config: &str) -> Result<(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 fn build_rule(
     id: &str,
     label: &str,
@@ -696,6 +696,7 @@ mod tests {
             "daily_review",
             None,
             None,
+            None,
         )
         .expect("update should not error");
         assert!(result.is_none());
@@ -736,6 +737,7 @@ mod tests {
             "cron",
             "0 9 * * *",
             "daily_review",
+            None,
             None,
             None,
         )
@@ -806,6 +808,7 @@ mod tests {
             "daily_review",
             None,
             None,
+            None,
         )
         .expect_err("invalid cron must be rejected");
         assert!(err.to_string().contains("invalid cron"), "got: {err}");
@@ -837,6 +840,7 @@ mod tests {
             "cron",
             "99 99 * * *",
             "daily_review",
+            None,
             None,
             None,
         )
@@ -897,6 +901,7 @@ mod tests {
             "cron",
             "0 23 * * *",
             "daily_review",
+            None,
             None,
             None,
         )

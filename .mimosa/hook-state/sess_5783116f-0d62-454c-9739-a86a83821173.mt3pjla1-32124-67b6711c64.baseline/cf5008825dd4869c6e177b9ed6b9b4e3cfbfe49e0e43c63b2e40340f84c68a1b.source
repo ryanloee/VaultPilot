@@ -1849,6 +1849,7 @@ mod tests {
             "custom",
             None,
             Some("Summarize recent notes"),
+            None,
         )
         .expect("create rule");
 

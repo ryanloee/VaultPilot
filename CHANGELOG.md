@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.35] - 2026-08-22
+
+### Added
+- **Per-rule provider selection**: each trigger rule can now specify which provider (LLM) to use for its AI call. New/edit form shows a "使用供应商" dropdown (default = active provider). Rule list displays a 🏷 tag when a specific provider is set. The override applies per-request only — disk settings are untouched.
+- `ask_with_ai_with_context` gains `provider_name_override` parameter (all existing callers pass `None`).
+
 ## [0.7.34] - 2026-08-21
 
 ### BREAKING CHANGE

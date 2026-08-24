@@ -218,7 +218,15 @@ pub fn remove_peer(device_id: &str) -> Result<()> {
 // ── Sync engine ─────────────────────────────────────────────────────────────
 
 /// Bidirectionally sync the local vault with `peer` reachable at `remote_ip`.
-pub async fn sync_with_peer(remote_ip: &str, peer: &PeerDevice) -> Result<SyncResult> {
+///
+/// `mode` is `"full"` (sync the entire vault) or `"selected"` (only paths that
+/// start with one of the `includes` folder/file prefixes).
+pub async fn sync_with_peer(
+    remote_ip: &str,
+    peer: &PeerDevice,
+    mode: &str,
+    includes: &[String],
+) -> Result<SyncResult> {
     let my_id = get_identity()?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -245,10 +253,24 @@ pub async fn sync_with_peer(remote_ip: &str, peer: &PeerDevice) -> Result<SyncRe
     let remote_map: HashMap<&str, &ManifestEntry> =
         remote_manifest.iter().map(|e| (e.path.as_str(), e)).collect();
 
+    // Selective-sync filter: when `mode == "selected"` and `includes` is
+    // non-empty, keep only paths equal to or nested under one of the prefixes.
+    let keep = |p: &str| -> bool {
+        if mode != "selected" || includes.is_empty() {
+            return true;
+        }
+        includes
+            .iter()
+            .any(|inc| p == inc || p.starts_with(&format!("{inc}/")))
+    };
+
     let mut result = SyncResult::default();
 
     // Pull from remote what we lack or that changed remotely.
     for r in &remote_manifest {
+        if !keep(&r.path) {
+            continue;
+        }
         match local_map.get(r.path.as_str()) {
             None => {
                 if let Ok(data) = get_remote_file(&client, &base, &my_id, &r.path).await {
@@ -309,6 +331,9 @@ pub async fn sync_with_peer(remote_ip: &str, peer: &PeerDevice) -> Result<SyncRe
 
     // Push to remote what we have but they don't.
     for l in &local {
+        if !keep(&l.path) {
+            continue;
+        }
         if !remote_map.contains_key(l.path.as_str()) {
             if let Some(src) = safe_join(&vault_dir, &l.path) {
                 if let Ok(data) = std::fs::read(&src) {

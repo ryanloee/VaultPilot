@@ -243,6 +243,16 @@ export const mockApi = {
     noteCount: number;
     vaultName: string;
   } | null> => null,
+  scanLanDevices: async (): Promise<
+    Array<{
+      ip: string;
+      hostname: string;
+      platform: string;
+      vaultPilotVersion: string;
+      noteCount: number;
+      vaultName: string;
+    }>
+  > => [],
   generatePairCode: async (): Promise<string> => "MOCK12",
   listSyncPeers: async (): Promise<
     Array<{
@@ -278,7 +288,9 @@ export const mockApi = {
   }),
   syncWithPeer: async (
     _ip: string,
-    _deviceId: string
+    _deviceId: string,
+    _mode?: "full" | "selected",
+    _includes?: string[]
   ): Promise<{
     pulled: number;
     pushed: number;

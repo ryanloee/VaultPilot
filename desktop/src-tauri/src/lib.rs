@@ -190,6 +190,7 @@ pub fn run() {
             commands::triggers::clear_trigger_executions,
             // sync
             commands::sync::discover_device,
+            commands::sync::scan_lan_devices,
             commands::sync::generate_pair_code,
             commands::sync::list_sync_peers,
             commands::sync::remove_sync_peer,

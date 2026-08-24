@@ -54,6 +54,55 @@ pub async fn discover_device(ip: &str) -> Result<Option<DeviceInfo>> {
     }
 }
 
+/// Best-effort local IPv4 — the source address the OS would use for outbound
+/// traffic (via a throwaway UDP connect that never sends a packet).
+fn local_ipv4() -> Option<std::net::Ipv4Addr> {
+    let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect("8.8.8.8:80").ok()?;
+    match sock.local_addr().ok()?.ip() {
+        std::net::IpAddr::V4(v4) => Some(v4),
+        _ => None,
+    }
+}
+
+/// Scan the local /24 subnet for other VaultPilot instances.
+///
+/// Probes every host on the same /24 as the local interface (skipping self)
+/// concurrently and returns those that answer `/hello`. This backs the
+/// "leave the search box empty → browse the LAN" UX.
+pub async fn scan_lan() -> Vec<(String, DeviceInfo)> {
+    let Some(ip) = local_ipv4() else {
+        return Vec::new();
+    };
+    let octets = ip.octets();
+    // Loopback / odd subnets: nothing to scan.
+    if octets[0] == 127 {
+        return Vec::new();
+    }
+    let prefix = format!("{}.{}.{}.", octets[0], octets[1], octets[2]);
+    let mut handles = Vec::new();
+    for last in 1..=254u8 {
+        if last == octets[3] {
+            continue;
+        }
+        let target = format!("{prefix}{last}");
+        handles.push(tokio::task::spawn(async move {
+            match discover_device(&target).await {
+                Ok(Some(info)) => Some((target, info)),
+                _ => None,
+            }
+        }));
+    }
+    let mut out = Vec::new();
+    for h in handles {
+        if let Ok(Some(pair)) = h.await {
+            out.push(pair);
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

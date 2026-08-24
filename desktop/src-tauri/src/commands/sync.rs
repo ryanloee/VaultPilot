@@ -39,6 +39,35 @@ pub async fn discover_device(
         .map_err(|e| e.to_string())
 }
 
+/// A device found by the LAN scan, with its network address.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScannedDeviceDto {
+    pub ip: String,
+    pub hostname: String,
+    pub platform: String,
+    pub vault_pilot_version: String,
+    pub note_count: usize,
+    pub vault_name: String,
+}
+
+/// Scan the local /24 subnet for other VaultPilot instances.
+#[tauri::command]
+pub async fn scan_lan_devices() -> Result<Vec<ScannedDeviceDto>, String> {
+    Ok(vaultpilot_lib::sync_discovery::scan_lan()
+        .await
+        .into_iter()
+        .map(|(ip, d)| ScannedDeviceDto {
+            ip,
+            hostname: d.hostname,
+            platform: d.platform,
+            vault_pilot_version: d.vault_pilot_version,
+            note_count: d.note_count,
+            vault_name: d.vault_name,
+        })
+        .collect())
+}
+
 /// Generate a pairing code for the *acceptor* to display.
 #[tauri::command]
 pub async fn generate_pair_code() -> Result<String, String> {
@@ -69,10 +98,15 @@ pub async fn complete_pairing(
 }
 
 /// Bidirectionally sync with a paired device (looked up by `device_id`).
+///
+/// `mode` is `"full"` or `"selected"`; when `"selected"`, only paths under one
+/// of the `includes` folder/file prefixes are transferred.
 #[tauri::command]
 pub async fn sync_with_peer(
     ip: String,
     device_id: String,
+    mode: Option<String>,
+    includes: Option<Vec<String>>,
 ) -> Result<vaultpilot_lib::sync::SyncResult, String> {
     let peer = vaultpilot_lib::sync::list_peers()
         .into_iter()
@@ -85,7 +119,9 @@ pub async fn sync_with_peer(
     } else {
         ip
     };
-    vaultpilot_lib::sync::sync_with_peer(&target_ip, &peer)
+    let mode = mode.unwrap_or_else(|| "full".to_string());
+    let includes = includes.unwrap_or_default();
+    vaultpilot_lib::sync::sync_with_peer(&target_ip, &peer, &mode, &includes)
         .await
         .map_err(|e| e.to_string())
 }

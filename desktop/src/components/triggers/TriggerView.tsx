@@ -322,6 +322,12 @@ export function TriggerView() {
 
   const handleSave = async () => {
     if (!newLabel.trim() || (!editingEvent && selectedDays.length === 0)) return;
+    // Custom action REQUIRES a prompt — saving without one would create a
+    // rule that always fires with error #2842 on every trigger.
+    if (newAction === "custom" && !newPrompt.trim()) {
+      setError("自定义提示词动作必须填写提示词内容，或改选其他动作。");
+      return;
+    }
     setCreating(true);
     try {
       const prompt = newAction === "custom" ? newPrompt.trim() || undefined : undefined;
@@ -558,19 +564,29 @@ export function TriggerView() {
           </div>
 
           {newAction === "custom" && (
-            <Textarea
-              value={newPrompt}
-              onChange={(e) => setNewPrompt(e.target.value)}
-              placeholder="自定义提示词…"
-              rows={3}
-              className="text-sm"
-            />
+            <div className="space-y-1">
+              <Textarea
+                value={newPrompt}
+                onChange={(e) => setNewPrompt(e.target.value)}
+                placeholder="自定义提示词（必填）— 例如：总结我最近一周的笔记并列出关键要点"
+                rows={3}
+                className={cn("text-sm", !newPrompt.trim() && "border-destructive/50")}
+              />
+              {!newPrompt.trim() && (
+                <p className="text-xs text-destructive">⚠ 选择「自定义提示词」动作时必须填写提示词内容</p>
+              )}
+            </div>
           )}
 
           <Button
             size="sm"
             onClick={handleSave}
-            disabled={creating || !newLabel.trim() || (!editingEvent && selectedDays.length === 0)}
+            disabled={
+              creating ||
+              !newLabel.trim() ||
+              (!editingEvent && selectedDays.length === 0) ||
+              (newAction === "custom" && !newPrompt.trim())
+            }
           >
             {creating
               ? editingRule

@@ -121,13 +121,15 @@ export function SyncPanel({ vaultDir }: { vaultDir: string }) {
     }
   };
 
-  const doPair = async () => {
-    if (!remoteIp.trim() || !remoteCode.trim()) return;
+  const doPair = async (pairIp?: string) => {
+    const targetIp = (pairIp ?? remoteIp).trim();
+    const code = remoteCode.trim();
+    if (!targetIp || !code) return;
     setBusy(true);
     setMsg(null);
     try {
-      await api.completePairing(remoteIp.trim(), remoteCode.trim());
-      setRemoteIp("");
+      await api.completePairing(targetIp, code);
+      if (!pairIp) setRemoteIp("");
       setRemoteCode("");
       await refreshPeers();
       setMsg("配对成功");
@@ -235,7 +237,7 @@ export function SyncPanel({ vaultDir }: { vaultDir: string }) {
             placeholder="对方配对码"
             className="w-28 rounded-md border border-border bg-background px-3 py-1.5 text-sm font-mono"
           />
-          <Button size="sm" variant="outline" onClick={doPair} disabled={busy || !remoteIp.trim() || !remoteCode.trim()}>
+          <Button size="sm" variant="outline" onClick={() => void doPair()} disabled={busy || !remoteIp.trim() || !remoteCode.trim()}>
             {busy ? "配对中…" : "配对"}
           </Button>
         </div>
@@ -318,17 +320,25 @@ export function SyncPanel({ vaultDir }: { vaultDir: string }) {
             <div className="text-muted-foreground">
               VaultPilot v{device.vaultPilotVersion} · {device.noteCount} 篇笔记 · {device.vaultName}
             </div>
-            <Button
-              size="sm"
-              variant="outline"
-              className="mt-1"
-              onClick={() => {
-                setRemoteIp(ip.trim());
-                void searchDevice();
-              }}
-            >
-              用此 IP 配对
-            </Button>
+            <div className="flex items-center gap-2 mt-1">
+              <input
+                value={remoteCode}
+                onChange={(e) => setRemoteCode(e.target.value)}
+                placeholder="对方配对码"
+                className="w-32 rounded-md border border-border bg-background px-3 py-1.5 text-sm font-mono"
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy || !remoteCode.trim()}
+                onClick={() => void doPair(ip.trim())}
+              >
+                {busy ? "配对中…" : "用此 IP 配对"}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              在对方设备上点「生成配对码」并把显示的码填到上面。
+            </p>
           </div>
         )}
       </div>

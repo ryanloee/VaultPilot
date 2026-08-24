@@ -18,15 +18,51 @@ type DiscoveredDevice = {
   vaultName: string;
 };
 
+type PeerDevice = {
+  deviceId: string;
+  hostname: string;
+  platform: string;
+  token: string;
+  ip: string | null;
+  addedAt: string;
+  lastSyncAt: string | null;
+};
+
+type SyncResult = {
+  pulled: number;
+  pushed: number;
+  conflicts: number;
+  errors: string[];
+};
+
 export function SyncPanel({ vaultDir }: { vaultDir: string }) {
   const [status, setStatus] = useState<SyncStatus | null>(null);
   const [checking, setChecking] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+
+  // Discovery
   const [ip, setIp] = useState("");
   const [searching, setSearching] = useState(false);
   const [device, setDevice] = useState<DiscoveredDevice | null>(null);
   const [searchMsg, setSearchMsg] = useState<string | null>(null);
+
+  // Pairing & sync
+  const [pairCode, setPairCode] = useState<string | null>(null);
+  const [remoteIp, setRemoteIp] = useState("");
+  const [remoteCode, setRemoteCode] = useState("");
+  const [peers, setPeers] = useState<PeerDevice[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [syncResult, setSyncResult] = useState<Record<string, SyncResult>>({});
+  const [syncingId, setSyncingId] = useState<string | null>(null);
+
+  const refreshPeers = async () => {
+    try {
+      setPeers(await api.listSyncPeers());
+    } catch {
+      /* ignore */
+    }
+  };
 
   const check = async () => {
     setChecking(true);
@@ -65,6 +101,7 @@ export function SyncPanel({ vaultDir }: { vaultDir: string }) {
       if (found) {
         setDevice(found as DiscoveredDevice);
         setSearchMsg(null);
+        void refreshPeers();
       } else {
         setSearchMsg(`在 ${ip} 上未找到 VaultPilot 客户端（或对方未开启同步）`);
       }
@@ -75,13 +112,65 @@ export function SyncPanel({ vaultDir }: { vaultDir: string }) {
     }
   };
 
+  const genPairCode = async () => {
+    try {
+      setPairCode(await api.generatePairCode());
+      await refreshPeers();
+    } catch (e) {
+      setMsg(`生成配对码失败：${e}`);
+    }
+  };
+
+  const doPair = async () => {
+    if (!remoteIp.trim() || !remoteCode.trim()) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      await api.completePairing(remoteIp.trim(), remoteCode.trim());
+      setRemoteIp("");
+      setRemoteCode("");
+      await refreshPeers();
+      setMsg("配对成功");
+    } catch (e) {
+      setMsg(`配对失败：${e}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doSync = async (peer: PeerDevice) => {
+    setSyncingId(peer.deviceId);
+    setMsg(null);
+    try {
+      const r = await api.syncWithPeer(peer.ip ?? "", peer.deviceId);
+      setSyncResult((prev) => ({ ...prev, [peer.deviceId]: r as SyncResult }));
+      await refreshPeers();
+    } catch (e) {
+      setMsg(`同步失败：${e}`);
+    } finally {
+      setSyncingId(null);
+    }
+  };
+
+  const removePeer = async (id: string) => {
+    try {
+      await api.removeSyncPeer(id);
+      await refreshPeers();
+    } catch (e) {
+      setMsg(`移除失败：${e}`);
+    }
+  };
+
+  const platformIcon = (p: string) =>
+    p === "windows" ? "💻" : p === "linux" ? "🐧" : "📱";
+
   return (
     <div className="space-y-4">
       <div>
         <h3 className="text-sm font-semibold mb-1">笔记同步</h3>
         <p className="text-xs text-muted-foreground">
-          Vault 本身是一个 Markdown 文件夹，天然支持文件夹级同步。
-          用 Syncthing / Dropbox / OneDrive 等工具把下面的路径同步到手机即可。
+          在同一局域网里，把当前设备与另一台 VaultPilot 配对后，即可双向同步整个
+          Vault（Markdown 文件夹）。也支持用 Syncthing / Dropbox 等工具同步下方路径。
         </p>
       </div>
 
@@ -98,6 +187,107 @@ export function SyncPanel({ vaultDir }: { vaultDir: string }) {
             ⧉
           </Button>
         </div>
+      </div>
+
+      {/* Pairing code (acceptor side) */}
+      <div className="rounded-md border border-border bg-muted/30 px-3 py-2 space-y-2">
+        <div className="text-xs text-muted-foreground">本机配对码</div>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={genPairCode}>
+            生成配对码
+          </Button>
+          {pairCode && (
+            <code className="text-sm font-mono font-semibold px-2 py-1 rounded bg-background border border-border select-all">
+              {pairCode}
+            </code>
+          )}
+          {pairCode && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => navigator.clipboard?.writeText(pairCode)}
+              title="复制配对码"
+            >
+              ⧉
+            </Button>
+          )}
+        </div>
+        {pairCode && (
+          <p className="text-xs text-muted-foreground">
+            在另一台设备的「配对其他设备」里输入<strong>本机 IP</strong>与这个配对码即可配对。
+          </p>
+        )}
+      </div>
+
+      {/* Initiate pairing (initiator side) */}
+      <div className="rounded-md border border-border bg-muted/30 px-3 py-2 space-y-2">
+        <div className="text-xs text-muted-foreground">配对其他设备</div>
+        <div className="flex items-center gap-2">
+          <input
+            value={remoteIp}
+            onChange={(e) => setRemoteIp(e.target.value)}
+            placeholder="对方 IP（如 192.168.1.100）"
+            className="flex-1 rounded-md border border-border bg-background px-3 py-1.5 text-sm font-mono"
+          />
+          <input
+            value={remoteCode}
+            onChange={(e) => setRemoteCode(e.target.value)}
+            placeholder="对方配对码"
+            className="w-28 rounded-md border border-border bg-background px-3 py-1.5 text-sm font-mono"
+          />
+          <Button size="sm" variant="outline" onClick={doPair} disabled={busy || !remoteIp.trim() || !remoteCode.trim()}>
+            {busy ? "配对中…" : "配对"}
+          </Button>
+        </div>
+      </div>
+
+      {/* Paired devices */}
+      <div className="rounded-md border border-border bg-muted/30 px-3 py-2 space-y-2">
+        <div className="text-xs text-muted-foreground">已配对设备</div>
+        {peers.length === 0 && (
+          <p className="text-xs text-muted-foreground">还没有配对设备。</p>
+        )}
+        {peers.map((p) => (
+          <div key={p.deviceId} className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="text-primary font-semibold">
+                {platformIcon(p.platform)} {p.hostname}
+              </span>
+              <span className="text-muted-foreground">{p.ip ?? "（无 IP）"}</span>
+            </div>
+            {p.lastSyncAt && (
+              <div className="text-muted-foreground">
+                上次同步：{new Date(p.lastSyncAt).toLocaleString()}
+              </div>
+            )}
+            {syncResult[p.deviceId] && (
+              <div className="text-muted-foreground">
+                上次结果：拉取 {syncResult[p.deviceId].pulled} · 推送{" "}
+                {syncResult[p.deviceId].pushed} · 冲突{" "}
+                {syncResult[p.deviceId].conflicts}
+                {syncResult[p.deviceId].errors.length > 0 &&
+                  ` · 失败 ${syncResult[p.deviceId].errors.length}`}
+              </div>
+            )}
+            <div className="flex items-center gap-2 pt-1">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void doSync(p)}
+                disabled={syncingId === p.deviceId}
+              >
+                {syncingId === p.deviceId ? "同步中…" : "同步"}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => void removePeer(p.deviceId)}
+              >
+                移除
+              </Button>
+            </div>
+          </div>
+        ))}
       </div>
 
       {/* LAN device discovery — direct IP probe */}
@@ -128,7 +318,17 @@ export function SyncPanel({ vaultDir }: { vaultDir: string }) {
             <div className="text-muted-foreground">
               VaultPilot v{device.vaultPilotVersion} · {device.noteCount} 篇笔记 · {device.vaultName}
             </div>
-            <div className="pt-1 text-muted-foreground italic">同步功能开发中 — 敬请期待</div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-1"
+              onClick={() => {
+                setRemoteIp(ip.trim());
+                void searchDevice();
+              }}
+            >
+              用此 IP 配对
+            </Button>
           </div>
         )}
       </div>

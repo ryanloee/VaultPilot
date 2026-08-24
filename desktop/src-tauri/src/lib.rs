@@ -82,8 +82,7 @@ pub fn run() {
                         .unwrap_or(0);
                     (count as usize, storage.vault_dir_name())
                 };
-                vaultpilot_lib::sync_discovery::start_discovery_server(note_count, vault_name)
-                    .await;
+                vaultpilot_lib::sync::start_sync_server(note_count, vault_name).await;
             });
 
             // System tray so the app keeps running in the background when the
@@ -191,6 +190,11 @@ pub fn run() {
             commands::triggers::clear_trigger_executions,
             // sync
             commands::sync::discover_device,
+            commands::sync::generate_pair_code,
+            commands::sync::list_sync_peers,
+            commands::sync::remove_sync_peer,
+            commands::sync::complete_pairing,
+            commands::sync::sync_with_peer,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

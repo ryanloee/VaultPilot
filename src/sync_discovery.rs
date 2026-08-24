@@ -1,18 +1,17 @@
-//! LAN Sync Discovery — lightweight HTTP server + client probe.
+//! LAN Sync Discovery — read-only device probe.
 //!
-//! Each desktop instance listens on a well-known port (37421) and answers
-//! `GET /hello` with device info (hostname, platform, vault note count).
-//! The `discover_device` command probes a user-supplied IP to find other
-//! VaultPilot instances on the LAN.
+//! `discover_device` probes a user-supplied IP's well-known port (37421) to
+//! find other VaultPilot instances on the LAN. The matching HTTP server (which
+//! answers `GET /hello` and the authenticated `/pair/*` + `/sync/*` endpoints)
+//! now lives in the [`crate::sync`] module's `start_sync_server`.
 //!
 //! Security: the discovery endpoint is read-only (no vault data exposed
-//! beyond a note count and hostname). The sync server itself will require
-//! pairing consent before any data transfer.
+//! beyond a note count and hostname). Data transfer requires pairing first.
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-/// Well-known port for VaultPilot LAN discovery.
+/// Well-known port for VaultPilot LAN discovery (and the sync server).
 pub const DISCOVERY_PORT: u16 = 37421;
 
 /// Device identity returned by the `/hello` endpoint.
@@ -24,40 +23,6 @@ pub struct DeviceInfo {
     pub vault_pilot_version: String,
     pub note_count: usize,
     pub vault_name: String,
-}
-
-/// Spawn the discovery server on the Tauri async runtime. Non-fatal — if the
-/// port is already in use (another instance), the app continues normally.
-pub async fn start_discovery_server(note_count: usize, vault_name: String) {
-    let app = axum::Router::new().route(
-        "/hello",
-        axum::routing::get(move || async move {
-            axum::Json(DeviceInfo {
-                hostname: hostname::get()
-                    .unwrap_or_else(|_| "unknown".into())
-                    .to_string_lossy()
-                    .into_owned(),
-                platform: std::env::consts::OS.to_string(),
-                vault_pilot_version: env!("CARGO_PKG_VERSION").to_string(),
-                note_count,
-                vault_name,
-            })
-        }),
-    );
-
-    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], DISCOVERY_PORT));
-    match tokio::net::TcpListener::bind(addr).await {
-        Ok(listener) => {
-            tracing::info!(%addr, "sync discovery server started");
-            if let Err(e) = axum::serve(listener, app).await {
-                tracing::warn!(error = %e, "sync discovery server stopped");
-            }
-        }
-        Err(e) => {
-            // Port already in use — another VaultPilot instance is running.
-            tracing::debug!(error = %e, "discovery port in use, skipping");
-        }
-    }
 }
 
 /// Probe `http://{ip}:37421/hello` for a VaultPilot discovery endpoint.

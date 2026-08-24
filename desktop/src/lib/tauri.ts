@@ -126,6 +126,39 @@ export const tauriApi = {
       noteCount: number;
       vaultName: string;
     } | null>("discover_device", { ip }),
+  // ── sync pairing & transfer ──
+  generatePairCode: () => invoke<string>("generate_pair_code"),
+  listSyncPeers: () =>
+    invoke<
+      Array<{
+        deviceId: string;
+        hostname: string;
+        platform: string;
+        token: string;
+        ip: string | null;
+        addedAt: string;
+        lastSyncAt: string | null;
+      }>
+    >("list_sync_peers"),
+  removeSyncPeer: (deviceId: string) =>
+    invoke<void>("remove_sync_peer", { deviceId }),
+  completePairing: (ip: string, pairCode: string) =>
+    invoke<{
+      deviceId: string;
+      hostname: string;
+      platform: string;
+      token: string;
+      ip: string | null;
+      addedAt: string;
+      lastSyncAt: string | null;
+    }>("complete_pairing", { ip, pairCode }),
+  syncWithPeer: (ip: string, deviceId: string) =>
+    invoke<{
+      pulled: number;
+      pushed: number;
+      conflicts: number;
+      errors: string[];
+    }>("sync_with_peer", { ip, deviceId }),
   readImagePreview: (path: string) => invoke<string>("read_image_preview", { path }),
   openVaultDirectory: (path: string) => invoke<void>("open_vault_directory", { path }),
 

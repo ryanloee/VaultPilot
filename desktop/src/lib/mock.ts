@@ -243,6 +243,48 @@ export const mockApi = {
     noteCount: number;
     vaultName: string;
   } | null> => null,
+  generatePairCode: async (): Promise<string> => "MOCK12",
+  listSyncPeers: async (): Promise<
+    Array<{
+      deviceId: string;
+      hostname: string;
+      platform: string;
+      token: string;
+      ip: string | null;
+      addedAt: string;
+      lastSyncAt: string | null;
+    }>
+  > => [],
+  removeSyncPeer: async (_deviceId: string): Promise<void> => undefined,
+  completePairing: async (
+    _ip: string,
+    _pairCode: string
+  ): Promise<{
+    deviceId: string;
+    hostname: string;
+    platform: string;
+    token: string;
+    ip: string | null;
+    addedAt: string;
+    lastSyncAt: string | null;
+  }> => ({
+    deviceId: "mock-peer",
+    hostname: "Mock Peer",
+    platform: "linux",
+    token: "mock-token",
+    ip: "127.0.0.1",
+    addedAt: new Date().toISOString(),
+    lastSyncAt: null,
+  }),
+  syncWithPeer: async (
+    _ip: string,
+    _deviceId: string
+  ): Promise<{
+    pulled: number;
+    pushed: number;
+    conflicts: number;
+    errors: string[];
+  }> => ({ pulled: 0, pushed: 0, conflicts: 0, errors: [] }),
   loadNote: async (id: string): Promise<NoteDocument> => {
     const doc = noteDocs[id];
     if (!doc) throw new Error(`note not found: ${id}`);

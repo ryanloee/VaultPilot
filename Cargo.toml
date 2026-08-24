@@ -70,7 +70,7 @@ mailparse = { version = "0.16", optional = true }
 native-tls = { version = "0.2", optional = true }
 pdf-extract = "0.12"
 keyring = "4.1.5"
-pbkdf2 = { version = "0.12", features = ["sha2"] }
+pbkdf2 = { version = "0.13", features = ["sha2"] }
 
 [[bin]]
 name = "vaultpilot-cli"

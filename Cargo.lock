@@ -3569,23 +3569,13 @@ dependencies = [
 
 [[package]]
 name = "pbkdf2"
-version = "0.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8ed6a7761f76e3b9f92dfb0a60a6a6477c61024b775147ff0973a02653abaf2"
-dependencies = [
- "digest 0.10.7",
- "hmac 0.12.1",
- "sha2 0.10.9",
-]
-
-[[package]]
-name = "pbkdf2"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112d82ceb8c5bf524d9af484d4e4970c9fd5a0cc15ba14ad93dccd28873b0629"
 dependencies = [
  "digest 0.11.3",
  "hmac 0.13.0",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -6092,7 +6082,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vaultpilot"
-version = "0.7.35"
+version = "0.7.38"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -6114,7 +6104,7 @@ dependencies = [
  "libc",
  "mailparse",
  "native-tls",
- "pbkdf2 0.12.2",
+ "pbkdf2",
  "pdf-extract",
  "r2d2",
  "r2d2_sqlite",
@@ -7251,7 +7241,7 @@ dependencies = [
  "indexmap 2.14.0",
  "lzma-rust2",
  "memchr",
- "pbkdf2 0.13.0",
+ "pbkdf2",
  "ppmd-rust",
  "sha1",
  "time",

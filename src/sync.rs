@@ -221,12 +221,7 @@ pub async fn complete_pairing(remote_ip: &str, pair_code: &str) -> Result<PeerDe
         .build()?;
     let resp = client
         .post(&url)
-        .json(&serde_json::json!({
-            "deviceId": my_id.device_id,
-            "hostname": my_id.hostname,
-            "platform": my_id.platform,
-            "token": my_id.token,
-        }))
+        .json(&pair_request_body(&my_id))
         .send()
         .await
         .map_err(|e| anyhow!("配对请求失败：{e}"))?;
@@ -401,6 +396,170 @@ pub async fn sync_with_peer(
                     }
                 }
             }
+        }
+    }
+
+    update_peer_last_sync(&peer.device_id);
+    Ok(result)
+}
+
+// ── Selective (directional) sync ────────────────────────────────────────────
+
+/// Per-direction path selection for [`sync_with_peer_selection`]. Paths are
+/// exact vault-relative entries (`notes/foo.md`), as listed by the manifests.
+#[derive(Debug, Clone, Default)]
+pub struct SyncSelection {
+    /// Files to download from the peer.
+    pub pull: Vec<String>,
+    /// Files to send to the peer.
+    pub push: Vec<String>,
+}
+
+/// The peer's vault manifest — what a selective-sync picker offers for
+/// download. Authenticated with our own identity.
+pub async fn fetch_peer_manifest(remote_ip: &str) -> Result<Vec<ManifestEntry>> {
+    let my_id = get_identity()?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?;
+    let base = format!("http://{remote_ip}:{SYNC_PORT}");
+    client
+        .get(format!("{base}/sync/manifest"))
+        .query(&[
+            ("device", my_id.device_id.as_str()),
+            ("token", my_id.token.as_str()),
+        ])
+        .send()
+        .await
+        .map_err(|e| anyhow!("获取对方清单失败：{e}"))?
+        .error_for_status()
+        .map_err(|e| anyhow!("获取对方清单被拒绝：{e}（可能需要重新配对）"))?
+        .json()
+        .await
+        .map_err(|e| anyhow!("解析对方清单失败：{e}"))
+}
+
+/// This vault's manifest — what a selective-sync picker offers for sending.
+pub fn local_manifest() -> Result<Vec<ManifestEntry>> {
+    let st = state().ok_or_else(|| anyhow!("sync state not initialized"))?;
+    Ok(scan_manifest(&st.vault_dir))
+}
+
+/// Sync exactly the files the user picked, per direction.
+///
+/// Pulls every path in `sel.pull` that exists on the peer (identical content
+/// is skipped; divergent content keeps local and stores conflict copies on
+/// both sides, same as full sync). Pushes every existing path in `sel.push`.
+pub async fn sync_with_peer_selection(
+    remote_ip: &str,
+    peer: &PeerDevice,
+    sel: &SyncSelection,
+) -> Result<SyncResult> {
+    if sel.pull.is_empty() && sel.push.is_empty() {
+        return Err(anyhow!("未选择任何要同步的文件"));
+    }
+    let my_id = get_identity()?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?;
+    let base = format!("http://{remote_ip}:{SYNC_PORT}");
+    let st = state().ok_or_else(|| anyhow!("sync state not initialized"))?;
+    let vault_dir = st.vault_dir.clone();
+    let local_map: HashMap<String, ManifestEntry> = local_manifest()?
+        .into_iter()
+        .map(|e| (e.path.clone(), e))
+        .collect();
+
+    let mut result = SyncResult::default();
+
+    // ── Pull ──
+    let need_remote_manifest = !sel.pull.is_empty();
+    let remote_map: HashMap<String, ManifestEntry> = if need_remote_manifest {
+        fetch_peer_manifest(remote_ip)
+            .await?
+            .into_iter()
+            .map(|e| (e.path.clone(), e))
+            .collect()
+    } else {
+        HashMap::new()
+    };
+    for path in &sel.pull {
+        let Some(remote_entry) = remote_map.get(path) else {
+            result.errors.push(format!("对方不存在：{path}"));
+            continue;
+        };
+        match local_map.get(path) {
+            None => match get_remote_file(&client, &base, &my_id, path).await {
+                Ok(data) => {
+                    let dest = match safe_join(&vault_dir, path) {
+                        Some(p) => p,
+                        None => {
+                            result.errors.push(format!("跳过非法路径：{path}"));
+                            continue;
+                        }
+                    };
+                    if let Some(parent) = dest.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    if std::fs::write(&dest, &data).is_ok() {
+                        result.pulled += 1;
+                    } else {
+                        result.errors.push(format!("写入失败：{path}"));
+                    }
+                }
+                Err(_) => result.errors.push(format!("拉取失败：{path}")),
+            },
+            Some(local_entry) if local_entry.sha256 == remote_entry.sha256 => {}
+            Some(_) => {
+                // Both sides changed: keep local here, park the peer's copy as
+                // a conflict file locally and push ours as one there.
+                if let Ok(data) = get_remote_file(&client, &base, &my_id, path).await {
+                    let cp = conflict_path(&vault_dir, path, &peer.hostname);
+                    if let Some(parent) = cp.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    if std::fs::write(&cp, &data).is_ok() {
+                        if let Some(local_src) = safe_join(&vault_dir, path) {
+                            if let Ok(local_data) = std::fs::read(&local_src) {
+                                let _ = put_remote_file(
+                                    &client,
+                                    &base,
+                                    &my_id,
+                                    &conflict_rel(path, &my_id.hostname),
+                                    &local_data,
+                                )
+                                .await;
+                            }
+                        }
+                        result.conflicts += 1;
+                    } else {
+                        result.errors.push(format!("冲突副本写入失败：{path}"));
+                    }
+                } else {
+                    result.errors.push(format!("冲突拉取失败：{path}"));
+                }
+            }
+        }
+    }
+
+    // ── Push ──
+    for path in &sel.push {
+        let Some(src) = safe_join(&vault_dir, path) else {
+            result.errors.push(format!("跳过非法路径：{path}"));
+            continue;
+        };
+        match std::fs::read(&src) {
+            Ok(data) => {
+                if put_remote_file(&client, &base, &my_id, path, &data)
+                    .await
+                    .is_ok()
+                {
+                    result.pushed += 1;
+                } else {
+                    result.errors.push(format!("推送失败：{path}"));
+                }
+            }
+            Err(_) => result.errors.push(format!("本地读取失败：{path}")),
         }
     }
 
@@ -711,6 +870,44 @@ fn err_response(code: axum::http::StatusCode, msg: &str) -> axum::response::Resp
     (code, axum::Json(serde_json::json!({ "error": msg }))).into_response()
 }
 
+/// JSON body the initiator POSTs to `/pair/accept`.
+///
+/// Carries BOTH key styles — `deviceId` (new, camelCase peers) and
+/// `device_id` (legacy peers whose `PairAcceptBody` predates
+/// `#[serde(rename_all = "camelCase")]` and rejects camelCase with 422).
+/// `hostname`/`platform`/`token` are single words, identical in both
+/// conventions. serde ignores unknown keys, so every version accepts this.
+pub(crate) fn pair_request_body(id: &LocalIdentity) -> serde_json::Value {
+    serde_json::json!({
+        "deviceId": id.device_id,
+        "device_id": id.device_id,
+        "hostname": id.hostname,
+        "platform": id.platform,
+        "token": id.token,
+    })
+}
+
+/// JSON body returned by `/pair/accept` on success.
+///
+/// The initiator decodes this as its own `PeerDevice` (see
+/// `complete_pairing`), so it must carry every required field — including
+/// `addedAt`. REGRESSION (#4067): the response used to omit `addedAt`, so
+/// `resp.json::<PeerDevice>()` always failed with "error decoding response
+/// body"; only the acceptor recorded the pairing and every later sync was
+/// rejected 403 on that side. Extra fields are ignored by older clients
+/// (serde skips unknown keys), so this stays wire-compatible both ways.
+pub(crate) fn pair_accept_success_json(id: &LocalIdentity) -> serde_json::Value {
+    serde_json::json!({
+        "deviceId": id.device_id,
+        "hostname": id.hostname,
+        "platform": id.platform,
+        "token": id.token,
+        "ip": serde_json::Value::Null,
+        "addedAt": now_rfc3339(),
+        "lastSyncAt": serde_json::Value::Null,
+    })
+}
+
 async fn pair_accept_handler(
     axum::extract::Query(q): axum::extract::Query<PairCodeQuery>,
     axum::extract::Json(body): axum::extract::Json<PairAcceptBody>,
@@ -771,12 +968,7 @@ async fn pair_accept_handler(
     match get_identity() {
         Ok(id) => (
             axum::http::StatusCode::OK,
-            axum::Json(serde_json::json!({
-                "deviceId": id.device_id,
-                "hostname": id.hostname,
-                "platform": id.platform,
-                "token": id.token,
-            })),
+            axum::Json(pair_accept_success_json(&id)),
         )
             .into_response(),
         Err(e) => err_response(

@@ -137,3 +137,51 @@ pub async fn sync_with_peer(
         .await
         .map_err(|e| e.to_string())
 }
+
+/// The paired peer's vault manifest — the "download from peer" side of the
+/// selective-sync picker.
+#[tauri::command]
+pub async fn get_peer_manifest(
+    ip: String,
+) -> Result<Vec<vaultpilot_lib::sync::ManifestEntry>, String> {
+    vaultpilot_lib::sync::fetch_peer_manifest(&ip)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// This vault's manifest — the "send to peer" side of the picker.
+#[tauri::command]
+pub async fn list_local_manifest() -> Result<Vec<vaultpilot_lib::sync::ManifestEntry>, String> {
+    tokio::task::spawn_blocking(vaultpilot_lib::sync::local_manifest)
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Sync exactly the files picked per direction by the user.
+#[tauri::command]
+pub async fn sync_selected(
+    ip: String,
+    device_id: String,
+    pull: Option<Vec<String>>,
+    push: Option<Vec<String>>,
+) -> Result<vaultpilot_lib::sync::SyncResult, String> {
+    let peer = vaultpilot_lib::sync::list_peers()
+        .into_iter()
+        .find(|p| p.device_id == device_id)
+        .ok_or_else(|| "未找到该配对设备".to_string())?;
+    let target_ip = if ip.is_empty() {
+        peer.ip
+            .clone()
+            .ok_or_else(|| "该设备无 IP 记录，请重新配对或手动指定 IP".to_string())?
+    } else {
+        ip
+    };
+    let sel = vaultpilot_lib::sync::SyncSelection {
+        pull: pull.unwrap_or_default(),
+        push: push.unwrap_or_default(),
+    };
+    vaultpilot_lib::sync::sync_with_peer_selection(&target_ip, &peer, &sel)
+        .await
+        .map_err(|e| e.to_string())
+}

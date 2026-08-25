@@ -86,11 +86,10 @@ pub fn run() {
                         .unwrap_or(0);
                     (count as usize, storage.vault_dir_name())
                 };
-                let on_event: Arc<
-                    dyn Fn(vaultpilot_lib::sync::SyncPairingEvent) + Send + Sync,
-                > = Arc::new(move |e| {
-                    let _ = sync_app_handle.emit("sync-pairing", e);
-                });
+                let on_event: Arc<dyn Fn(vaultpilot_lib::sync::SyncPairingEvent) + Send + Sync> =
+                    Arc::new(move |e| {
+                        let _ = sync_app_handle.emit("sync-pairing", e);
+                    });
                 vaultpilot_lib::sync::start_sync_server(note_count, vault_name, on_event).await;
             });
 
@@ -206,6 +205,9 @@ pub fn run() {
             commands::sync::remove_sync_peer,
             commands::sync::complete_pairing,
             commands::sync::sync_with_peer,
+            commands::sync::get_peer_manifest,
+            commands::sync::list_local_manifest,
+            commands::sync::sync_selected,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

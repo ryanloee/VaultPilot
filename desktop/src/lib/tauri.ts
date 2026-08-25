@@ -176,6 +176,26 @@ export const tauriApi = {
       conflicts: number;
       errors: string[];
     }>("sync_with_peer", { ip, deviceId, mode, includes }),
+  getPeerManifest: (ip: string) =>
+    invoke<
+      Array<{ path: string; sha256: string; mtimeMs: number }>
+    >("get_peer_manifest", { ip }),
+  listLocalManifest: () =>
+    invoke<
+      Array<{ path: string; sha256: string; mtimeMs: number }>
+    >("list_local_manifest"),
+  syncSelected: (
+    ip: string,
+    deviceId: string,
+    pull?: string[],
+    push?: string[]
+  ) =>
+    invoke<{
+      pulled: number;
+      pushed: number;
+      conflicts: number;
+      errors: string[];
+    }>("sync_selected", { ip, deviceId, pull, push }),
   readImagePreview: (path: string) => invoke<string>("read_image_preview", { path }),
   openVaultDirectory: (path: string) => invoke<void>("open_vault_directory", { path }),
 

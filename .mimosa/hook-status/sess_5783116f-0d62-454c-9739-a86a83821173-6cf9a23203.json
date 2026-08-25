@@ -1,10 +1,10 @@
 {
   "schemaVersion": "mimosa-hook-status/v1",
-  "recordedAt": "2026-08-25T01:20:53.847Z",
+  "recordedAt": "2026-08-25T01:24:39.606Z",
   "sessionId": "sess_5783116f-0d62-454c-9739-a86a83821173",
   "event": "PostToolUse",
   "toolName": "Edit",
-  "file": "desktop/src/components/triggers/TriggerView.tsx",
+  "file": "desktop/src-tauri/src/commands/triggers.rs",
   "outcome": "clear",
   "coverage": "complete",
   "findingCount": 0,

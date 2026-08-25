@@ -9,6 +9,7 @@ use vaultpilot_lib::storage::{
 };
 
 #[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TriggerRuleDto {
     pub id: String,
     pub label: String,
@@ -80,6 +81,7 @@ impl TriggerRuleDto {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TriggerExecutionDto {
     pub id: String,
     pub rule_id: String,

@@ -63,6 +63,10 @@ function utcToLocal(hour: number, minute: number, day: number | null): { h: numb
 
 /** Generate a 5-field UTC cron expression from local UI state. */
 export function toCron(minute: number, hour: number, days: number[]): string {
+  // The cron crate uses 1-7 for day-of-week (never 0) — convert JS day
+  // numbers (0=Sunday, 1-6=Mon-Sat) to cron numbers (1-6=Mon-Sat, 7=Sun).
+  // parseDowField reverses this: cron 7 → JS 0 via `% 7`.
+  const toCronDay = (jsDay: number): number => (jsDay === 0 ? 7 : jsDay);
   if (days.length === 7) {
     const { h, m } = localToUtc(hour, minute, null);
     return `${m} ${h} * * *`;
@@ -72,7 +76,7 @@ export function toCron(minute: number, hour: number, days: number[]): string {
   let um = -1;
   for (const d of days) {
     const s = localToUtc(hour, minute, d);
-    utcDays.add(s.d ?? 0);
+    if (s.d !== null) utcDays.add(toCronDay(s.d));
     // Constant-offset timezones give identical times for every day; DST
     // zones can differ around transitions — take the first day's time.
     if (uh < 0) {

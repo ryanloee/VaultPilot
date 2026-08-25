@@ -1004,9 +1004,15 @@ mod tests {
         // Debug: test multiple dow formats to find what the cron crate accepts.
         let now = fixed_time();
         // Single value
-        assert!(next_due_time_at("0 22 * * 1", now).is_some(), "single dow=1");
+        assert!(
+            next_due_time_at("0 22 * * 1", now).is_some(),
+            "single dow=1"
+        );
         // Comma list without 0
-        assert!(next_due_time_at("0 22 * * 1,2,3,4,5", now).is_some(), "dow=1,2,3,4,5");
+        assert!(
+            next_due_time_at("0 22 * * 1,2,3,4,5", now).is_some(),
+            "dow=1,2,3,4,5"
+        );
         // Comma list WITH 0 — the reported bug
         let with_zero = next_due_time_at("0 22 * * 0,1,2,3,4", now);
         if with_zero.is_none() {
@@ -1016,7 +1022,10 @@ mod tests {
             eprintln!("CONFIRMED: dow containing 0 fails (cron crate uses 1-7, not 0-6)");
         }
         // Range
-        assert!(next_due_time_at("0 22 * * 1-5", now).is_some(), "dow=1-5 range");
+        assert!(
+            next_due_time_at("0 22 * * 1-5", now).is_some(),
+            "dow=1-5 range"
+        );
     }
 
     #[test]

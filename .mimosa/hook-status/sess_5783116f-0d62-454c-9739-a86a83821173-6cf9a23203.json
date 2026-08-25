@@ -1,14 +1,14 @@
 {
   "schemaVersion": "mimosa-hook-status/v1",
-  "recordedAt": "2026-08-25T01:24:39.606Z",
+  "recordedAt": "2026-08-25T01:40:13.592Z",
   "sessionId": "sess_5783116f-0d62-454c-9739-a86a83821173",
   "event": "PostToolUse",
   "toolName": "Edit",
-  "file": "desktop/src-tauri/src/commands/triggers.rs",
+  "file": "desktop/src-tauri/tauri.conf.json",
   "outcome": "clear",
   "coverage": "complete",
   "findingCount": 0,
-  "durationMs": 11,
+  "durationMs": 4,
   "hostState": "hook_complete",
   "reportHint": ".mimosa/reports/"
 }

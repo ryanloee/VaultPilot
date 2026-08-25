@@ -139,6 +139,7 @@ export const tauriApi = {
     >("scan_lan_devices"),
   // ── sync pairing & transfer ──
   generatePairCode: () => invoke<string>("generate_pair_code"),
+  regeneratePairCode: () => invoke<string>("regenerate_pair_code"),
   listSyncPeers: () =>
     invoke<
       Array<{
@@ -290,6 +291,30 @@ export async function onAgentStatus(
     };
   }
   return listen<AgentStatusPayload>("agent-status", (event) => {
+    handler(event.payload);
+  });
+}
+
+/** Payload pushed by the sync server on the *acceptor* side. */
+export type SyncPairingEventPayload = {
+  accepted?: { hostname: string; platform: string };
+  rejected?: { reason: string };
+};
+
+/**
+ * Subscribe to `sync-pairing` events — emitted on the device that *receives* a
+ * pairing handshake (the acceptor). Lets the desktop show a prompt when another
+ * device pairs with it, instead of staying silent. No-op in mock mode.
+ */
+export async function onSyncPairing(
+  handler: (payload: SyncPairingEventPayload) => void
+): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    return () => {
+      /* mock mode: no events */
+    };
+  }
+  return listen<SyncPairingEventPayload>("sync-pairing", (event) => {
     handler(event.payload);
   });
 }

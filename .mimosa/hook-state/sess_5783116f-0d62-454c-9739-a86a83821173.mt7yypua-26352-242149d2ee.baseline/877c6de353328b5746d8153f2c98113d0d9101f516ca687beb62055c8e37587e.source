@@ -20,6 +20,12 @@ impl AppState {
     pub fn new() -> anyhow::Result<Self> {
         let storage = StorageContext::for_sidecar()
             .map_err(|e| anyhow::anyhow!("failed to initialize storage context: {e}"))?;
+        // Initialize the LAN sync engine (pairing state + peer list) using the
+        // same vault and an out-of-vault config dir so peers aren't synced.
+        vaultpilot_lib::sync::init_sync_state(
+            storage.vault_dir().to_path_buf(),
+            storage.app_config_dir(),
+        );
         Ok(Self {
             storage: Arc::new(storage),
         })

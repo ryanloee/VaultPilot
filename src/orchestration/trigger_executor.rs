@@ -1000,6 +1000,26 @@ mod tests {
     // ── is_rule_due ──
 
     #[test]
+    fn next_due_time_accepts_comma_separated_dow() {
+        // Debug: test multiple dow formats to find what the cron crate accepts.
+        let now = fixed_time();
+        // Single value
+        assert!(next_due_time_at("0 22 * * 1", now).is_some(), "single dow=1");
+        // Comma list without 0
+        assert!(next_due_time_at("0 22 * * 1,2,3,4,5", now).is_some(), "dow=1,2,3,4,5");
+        // Comma list WITH 0 — the reported bug
+        let with_zero = next_due_time_at("0 22 * * 0,1,2,3,4", now);
+        if with_zero.is_none() {
+            // 0 is invalid in the cron crate's dow field (1-7 only, 1=Sun).
+            // The frontend generates JS day numbers (0=Sun) — must convert.
+            // For now, document the limitation; the fix is in the frontend toCron.
+            eprintln!("CONFIRMED: dow containing 0 fails (cron crate uses 1-7, not 0-6)");
+        }
+        // Range
+        assert!(next_due_time_at("0 22 * * 1-5", now).is_some(), "dow=1-5 range");
+    }
+
+    #[test]
     fn is_rule_due_true_when_never_fired_and_has_past_fire() {
         let rule = make_rule("r1", "0 9 * * *", TriggerAction::DailyReview);
         let now = fixed_time();

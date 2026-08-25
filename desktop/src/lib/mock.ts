@@ -254,6 +254,7 @@ export const mockApi = {
     }>
   > => [],
   generatePairCode: async (): Promise<string> => "MOCK12",
+  regeneratePairCode: async (): Promise<string> => "MOCK13",
   listSyncPeers: async (): Promise<
     Array<{
       deviceId: string;

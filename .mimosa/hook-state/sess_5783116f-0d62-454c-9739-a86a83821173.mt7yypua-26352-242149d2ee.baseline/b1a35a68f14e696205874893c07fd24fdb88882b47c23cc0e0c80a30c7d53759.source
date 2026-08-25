@@ -53,6 +53,7 @@ pub mod settings_schema;
 pub mod skills;
 pub mod startup_stats;
 pub mod storage;
+pub mod sync;
 pub mod sync_discovery;
 pub mod template;
 pub mod template_store;

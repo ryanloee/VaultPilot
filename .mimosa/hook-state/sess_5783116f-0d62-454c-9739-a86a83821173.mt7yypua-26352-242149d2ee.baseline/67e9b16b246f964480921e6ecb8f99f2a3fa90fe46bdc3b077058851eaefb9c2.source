@@ -126,6 +126,56 @@ export const tauriApi = {
       noteCount: number;
       vaultName: string;
     } | null>("discover_device", { ip }),
+  scanLanDevices: () =>
+    invoke<
+      Array<{
+        ip: string;
+        hostname: string;
+        platform: string;
+        vaultPilotVersion: string;
+        noteCount: number;
+        vaultName: string;
+      }>
+    >("scan_lan_devices"),
+  // ── sync pairing & transfer ──
+  generatePairCode: () => invoke<string>("generate_pair_code"),
+  regeneratePairCode: () => invoke<string>("regenerate_pair_code"),
+  listSyncPeers: () =>
+    invoke<
+      Array<{
+        deviceId: string;
+        hostname: string;
+        platform: string;
+        token: string;
+        ip: string | null;
+        addedAt: string;
+        lastSyncAt: string | null;
+      }>
+    >("list_sync_peers"),
+  removeSyncPeer: (deviceId: string) =>
+    invoke<void>("remove_sync_peer", { deviceId }),
+  completePairing: (ip: string, pairCode: string) =>
+    invoke<{
+      deviceId: string;
+      hostname: string;
+      platform: string;
+      token: string;
+      ip: string | null;
+      addedAt: string;
+      lastSyncAt: string | null;
+    }>("complete_pairing", { ip, pairCode }),
+  syncWithPeer: (
+    ip: string,
+    deviceId: string,
+    mode?: "full" | "selected",
+    includes?: string[]
+  ) =>
+    invoke<{
+      pulled: number;
+      pushed: number;
+      conflicts: number;
+      errors: string[];
+    }>("sync_with_peer", { ip, deviceId, mode, includes }),
   readImagePreview: (path: string) => invoke<string>("read_image_preview", { path }),
   openVaultDirectory: (path: string) => invoke<void>("open_vault_directory", { path }),
 
@@ -241,6 +291,30 @@ export async function onAgentStatus(
     };
   }
   return listen<AgentStatusPayload>("agent-status", (event) => {
+    handler(event.payload);
+  });
+}
+
+/** Payload pushed by the sync server on the *acceptor* side. */
+export type SyncPairingEventPayload = {
+  accepted?: { hostname: string; platform: string };
+  rejected?: { reason: string };
+};
+
+/**
+ * Subscribe to `sync-pairing` events — emitted on the device that *receives* a
+ * pairing handshake (the acceptor). Lets the desktop show a prompt when another
+ * device pairs with it, instead of staying silent. No-op in mock mode.
+ */
+export async function onSyncPairing(
+  handler: (payload: SyncPairingEventPayload) => void
+): Promise<UnlistenFn> {
+  if (!isTauri()) {
+    return () => {
+      /* mock mode: no events */
+    };
+  }
+  return listen<SyncPairingEventPayload>("sync-pairing", (event) => {
     handler(event.payload);
   });
 }

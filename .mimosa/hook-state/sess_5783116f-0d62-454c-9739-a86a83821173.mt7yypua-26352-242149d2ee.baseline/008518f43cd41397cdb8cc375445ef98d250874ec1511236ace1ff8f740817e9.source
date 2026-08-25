@@ -50,6 +50,17 @@ impl StorageContext {
             .unwrap_or("Vault")
             .to_string()
     }
+
+    /// App config root (the directory holding `settings.json`) — used to
+    /// persist sync peers/identity *outside* the synced vault so they are not
+    /// copied between devices.
+    pub fn app_config_dir(&self) -> std::path::PathBuf {
+        self.paths
+            .settings_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+    }
 }
 
 impl StorageContext {

@@ -8,11 +8,12 @@ mod commands;
 mod state;
 
 use crate::state::AppState;
+use std::sync::Arc;
 #[cfg(desktop)]
 use tauri::menu::{Menu, MenuItem};
 #[cfg(desktop)]
 use tauri::tray::TrayIconBuilder;
-use tauri::{Manager, WindowEvent};
+use tauri::{Emitter, Manager, WindowEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -70,6 +71,9 @@ pub fn run() {
             // LAN sync discovery server — listens on port 37421 and answers
             // GET /hello with device info so other VaultPilot instances on
             // the LAN can find us by IP. Non-fatal when the port is taken.
+            // Pairing events are forwarded to the UI via the `sync-pairing`
+            // Tauri event so the acceptor side gets a visible prompt.
+            let sync_app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let storage = discovery_storage;
                 let (note_count, vault_name) = {
@@ -82,8 +86,12 @@ pub fn run() {
                         .unwrap_or(0);
                     (count as usize, storage.vault_dir_name())
                 };
-                vaultpilot_lib::sync_discovery::start_discovery_server(note_count, vault_name)
-                    .await;
+                let on_event: Arc<
+                    dyn Fn(vaultpilot_lib::sync::SyncPairingEvent) + Send + Sync,
+                > = Arc::new(move |e| {
+                    let _ = sync_app_handle.emit("sync-pairing", e);
+                });
+                vaultpilot_lib::sync::start_sync_server(note_count, vault_name, on_event).await;
             });
 
             // System tray so the app keeps running in the background when the
@@ -191,6 +199,13 @@ pub fn run() {
             commands::triggers::clear_trigger_executions,
             // sync
             commands::sync::discover_device,
+            commands::sync::scan_lan_devices,
+            commands::sync::generate_pair_code,
+            commands::sync::regenerate_pair_code,
+            commands::sync::list_sync_peers,
+            commands::sync::remove_sync_peer,
+            commands::sync::complete_pairing,
+            commands::sync::sync_with_peer,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

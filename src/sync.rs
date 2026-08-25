@@ -284,7 +284,10 @@ pub async fn sync_with_peer(
 
     let remote_manifest: Vec<ManifestEntry> = client
         .get(format!("{base}/sync/manifest"))
-        .query(&[("device", my_id.device_id.as_str()), ("token", my_id.token.as_str())])
+        .query(&[
+            ("device", my_id.device_id.as_str()),
+            ("token", my_id.token.as_str()),
+        ])
         .send()
         .await
         .map_err(|e| anyhow!("获取对方清单失败：{e}"))?
@@ -299,8 +302,10 @@ pub async fn sync_with_peer(
 
     let local_map: HashMap<&str, &ManifestEntry> =
         local.iter().map(|e| (e.path.as_str(), e)).collect();
-    let remote_map: HashMap<&str, &ManifestEntry> =
-        remote_manifest.iter().map(|e| (e.path.as_str(), e)).collect();
+    let remote_map: HashMap<&str, &ManifestEntry> = remote_manifest
+        .iter()
+        .map(|e| (e.path.as_str(), e))
+        .collect();
 
     // Selective-sync filter: when `mode == "selected"` and `includes` is
     // non-empty, keep only paths equal to or nested under one of the prefixes.
@@ -669,6 +674,7 @@ struct PairCodeQuery {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PairAcceptBody {
     device_id: String,
     hostname: String,
@@ -702,11 +708,7 @@ fn authorized(device: &str, token: &str) -> bool {
 }
 
 fn err_response(code: axum::http::StatusCode, msg: &str) -> axum::response::Response {
-    (
-        code,
-        axum::Json(serde_json::json!({ "error": msg })),
-    )
-        .into_response()
+    (code, axum::Json(serde_json::json!({ "error": msg }))).into_response()
 }
 
 async fn pair_accept_handler(
@@ -756,7 +758,10 @@ async fn pair_accept_handler(
         emit_pairing(SyncPairingEvent::Rejected {
             reason: format!("记录配对失败：{e}"),
         });
-        return err_response(axum::http::StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+        return err_response(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            &e.to_string(),
+        );
     }
     emit_pairing(SyncPairingEvent::Accepted {
         hostname: body.hostname.clone(),
@@ -774,7 +779,10 @@ async fn pair_accept_handler(
             })),
         )
             .into_response(),
-        Err(e) => err_response(axum::http::StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => err_response(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            &e.to_string(),
+        ),
     }
 }
 
@@ -856,7 +864,10 @@ async fn sync_file_put_handler(
             axum::Json(serde_json::json!({ "ok": true })),
         )
             .into_response(),
-        Err(e) => err_response(axum::http::StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => err_response(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            &e.to_string(),
+        ),
     }
 }
 

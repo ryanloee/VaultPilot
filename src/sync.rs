@@ -817,7 +817,15 @@ pub async fn start_sync_server(
     match tokio::net::TcpListener::bind(addr).await {
         Ok(listener) => {
             tracing::info!(%addr, "sync server started");
-            if let Err(e) = axum::serve(listener, app).await {
+            // ConnectInfo lets /pair/accept record the initiator's IP, so the
+            // acceptor can later reach out to sync (the initiator already
+            // knows our address — it dialed us).
+            if let Err(e) = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            {
                 tracing::warn!(error = %e, "sync server stopped");
             }
         }
@@ -908,8 +916,31 @@ pub(crate) fn pair_accept_success_json(id: &LocalIdentity) -> serde_json::Value 
     })
 }
 
+/// Build the peer record the *acceptor* persists when a pairing handshake
+/// arrives. `remote_addr` is the TCP peer address (no port) — recorded so the
+/// acceptor can initiate sync later; REGRESSION (#4067 follow-up): it used to
+/// be hardcoded to None, so acceptor-side「同步」always failed with "该设备无 IP 记录".
+pub(crate) fn acceptor_peer_from_request(
+    device_id: &str,
+    hostname: &str,
+    platform: &str,
+    token: &str,
+    remote_addr: Option<std::net::SocketAddr>,
+) -> PeerDevice {
+    PeerDevice {
+        device_id: device_id.to_string(),
+        hostname: hostname.to_string(),
+        platform: platform.to_string(),
+        token: token.to_string(),
+        ip: remote_addr.map(|a| a.ip().to_string()),
+        added_at: now_rfc3339(),
+        last_sync_at: None,
+    }
+}
+
 async fn pair_accept_handler(
     axum::extract::Query(q): axum::extract::Query<PairCodeQuery>,
+    axum::extract::ConnectInfo(remote_addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     axum::extract::Json(body): axum::extract::Json<PairAcceptBody>,
 ) -> axum::response::Response {
     let st = match state() {
@@ -942,16 +973,14 @@ async fn pair_accept_handler(
         );
     }
     // The acceptor records the initiator as a peer (it learns the initiator's
-    // identity from the request body).
-    if let Err(e) = add_peer(PeerDevice {
-        device_id: body.device_id.clone(),
-        hostname: body.hostname.clone(),
-        platform: body.platform.clone(),
-        token: body.token.clone(),
-        ip: None,
-        added_at: now_rfc3339(),
-        last_sync_at: None,
-    }) {
+    // identity from the request body, and its address from the TCP connection).
+    if let Err(e) = add_peer(acceptor_peer_from_request(
+        &body.device_id,
+        &body.hostname,
+        &body.platform,
+        &body.token,
+        Some(remote_addr),
+    )) {
         emit_pairing(SyncPairingEvent::Rejected {
             reason: format!("记录配对失败：{e}"),
         });

@@ -19,7 +19,8 @@ use tauri::{Emitter, Manager, WindowEvent};
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init());
 
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
@@ -88,7 +89,35 @@ pub fn run() {
                 };
                 let on_event: Arc<dyn Fn(vaultpilot_lib::sync::SyncPairingEvent) + Send + Sync> =
                     Arc::new(move |e| {
-                        let _ = sync_app_handle.emit("sync-pairing", e);
+                        let _ = sync_app_handle.emit("sync-pairing", e.clone());
+                        // Native OS notification (Windows toast / Android
+                        // notification) so a pairing attempt is still visible
+                        // when the window is hidden in the tray. When visible,
+                        // the in-app banner in SyncPanel is enough.
+                        let visible = sync_app_handle
+                            .get_webview_window("main")
+                            .map(|w| w.is_visible().unwrap_or(false))
+                            .unwrap_or(false);
+                        if !visible {
+                            use tauri_plugin_notification::NotificationExt;
+                            use vaultpilot_lib::sync::SyncPairingEvent;
+                            let (title, body) = match &e {
+                                SyncPairingEvent::Accepted { hostname, .. } => (
+                                    "VaultPilot 配对成功".to_string(),
+                                    format!("「{hostname}」已与本设备配对"),
+                                ),
+                                SyncPairingEvent::Rejected { reason } => (
+                                    "VaultPilot 配对被拒绝".to_string(),
+                                    reason.clone(),
+                                ),
+                            };
+                            let _ = sync_app_handle
+                                .notification()
+                                .builder()
+                                .title(title)
+                                .body(body)
+                                .show();
+                        }
                     });
                 vaultpilot_lib::sync::start_sync_server(note_count, vault_name, on_event).await;
             });

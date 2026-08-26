@@ -11,7 +11,10 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::sync::{pair_accept_success_json, pair_request_body, LocalIdentity, PeerDevice};
+    use crate::sync::{
+        acceptor_peer_from_request, pair_accept_success_json, pair_request_body, LocalIdentity,
+        PeerDevice,
+    };
 
     fn sample_identity() -> LocalIdentity {
         LocalIdentity {
@@ -83,5 +86,21 @@ mod tests {
         let legacy: LegacySnakeStyle =
             serde_json::from_value(body).expect("legacy snake_case peer must decode request");
         assert_eq!(legacy.device_id, sample_identity().device_id);
+    }
+
+    #[test]
+    fn acceptor_records_initiator_ip_without_port() {
+        // Follow-up: the acceptor used to hardcode ip: None, so its「同步」
+        // button always failed with 该设备无 IP 记录 even right after a
+        // successful pairing. The TCP peer address must be recorded, sans port.
+        let addr: std::net::SocketAddr = "192.168.1.50:51234".parse().unwrap();
+        let peer = acceptor_peer_from_request("dev-1", "phone", "android", "tok", Some(addr));
+        assert_eq!(peer.ip.as_deref(), Some("192.168.1.50"));
+        assert_eq!(peer.device_id, "dev-1");
+        assert_eq!(peer.hostname, "phone");
+
+        // Unknown address still yields None (no crash / no empty string).
+        let no_addr = acceptor_peer_from_request("dev-1", "phone", "android", "tok", None);
+        assert!(no_addr.ip.is_none());
     }
 }

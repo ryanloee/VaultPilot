@@ -2,6 +2,7 @@
 
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
+use vaultpilot_lib::storage::rebuild_index_async;
 use vaultpilot_lib::sync_discovery;
 
 #[derive(Serialize, Deserialize)]
@@ -113,8 +114,13 @@ pub async fn complete_pairing(
 ///
 /// `mode` is `"full"` or `"selected"`; when `"selected"`, only paths under one
 /// of the `includes` folder/file prefixes are transferred.
+///
+/// On success the search index is rebuilt automatically — sync writes raw
+/// markdown files and `list_notes` reads the index, so without this the notes
+/// UI stays stale/empty until a manual rebuild.
 #[tauri::command]
 pub async fn sync_with_peer(
+    state: tauri::State<'_, AppState>,
     ip: String,
     device_id: String,
     mode: Option<String>,
@@ -133,9 +139,12 @@ pub async fn sync_with_peer(
     };
     let mode = mode.unwrap_or_else(|| "full".to_string());
     let includes = includes.unwrap_or_default();
-    vaultpilot_lib::sync::sync_with_peer(&target_ip, &peer, &mode, &includes)
+    let result = vaultpilot_lib::sync::sync_with_peer(&target_ip, &peer, &mode, &includes)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // Best-effort: keep the index in step with newly pulled files.
+    let _ = rebuild_index_async(&state.storage).await;
+    Ok(result)
 }
 
 /// The paired peer's vault manifest — the "download from peer" side of the
@@ -158,9 +167,11 @@ pub async fn list_local_manifest() -> Result<Vec<vaultpilot_lib::sync::ManifestE
         .map_err(|e| e.to_string())
 }
 
-/// Sync exactly the files picked per direction by the user.
+/// Sync exactly the files picked per direction by the user. Rebuilds the
+/// index afterwards (same rationale as [`sync_with_peer`]).
 #[tauri::command]
 pub async fn sync_selected(
+    state: tauri::State<'_, AppState>,
     ip: String,
     device_id: String,
     pull: Option<Vec<String>>,
@@ -181,7 +192,10 @@ pub async fn sync_selected(
         pull: pull.unwrap_or_default(),
         push: push.unwrap_or_default(),
     };
-    vaultpilot_lib::sync::sync_with_peer_selection(&target_ip, &peer, &sel)
+    let result = vaultpilot_lib::sync::sync_with_peer_selection(&target_ip, &peer, &sel)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // Best-effort: keep the index in step with newly pulled files.
+    let _ = rebuild_index_async(&state.storage).await;
+    Ok(result)
 }

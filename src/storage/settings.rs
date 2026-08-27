@@ -156,10 +156,31 @@ fn load_settings_raw(context: &StorageContext) -> Result<AppSettings> {
 }
 
 /// The old `default_timeout_ms()` value (60s). Providers still carrying it
-/// were never customized — bump them to the current default so slow-but-
-/// working mobile networks don't fail long generations that used to time
-/// out right as the answer was finishing.
+/// when a pre-v0.7.43 settings file is first loaded were never customized —
+/// [`apply_settings_migrations`] bumps them to the current default once so
+/// slow-but-working mobile networks don't fail long generations that used
+/// to time out right as the answer was finishing.
 pub(super) const LEGACY_DEFAULT_TIMEOUT_MS: u64 = 60_000;
+
+/// One-time settings-file migrations, keyed on
+/// [`crate::models::SETTINGS_REVISION`].
+///
+/// Runs on load only — never in normalize/save — so values the user
+/// deliberately chooses afterwards (e.g. re-entering 60000) stick.
+pub(super) fn apply_settings_migrations(settings: &mut AppSettings) {
+    if settings.settings_revision >= crate::models::SETTINGS_REVISION {
+        return;
+    }
+    if settings.provider.request_timeout_ms == LEGACY_DEFAULT_TIMEOUT_MS {
+        settings.provider.request_timeout_ms = crate::models::default_timeout_ms();
+    }
+    for p in &mut settings.providers {
+        if p.request_timeout_ms == LEGACY_DEFAULT_TIMEOUT_MS {
+            p.request_timeout_ms = crate::models::default_timeout_ms();
+        }
+    }
+    settings.settings_revision = crate::models::SETTINGS_REVISION;
+}
 
 pub(super) fn normalize_settings(settings: &mut AppSettings, paths: &AppPaths) {
     if let Some(vault_dir_override) = &paths.vault_dir_override {
@@ -173,9 +194,7 @@ pub(super) fn normalize_settings(settings: &mut AppSettings, paths: &AppPaths) {
     if settings.provider.model.trim().is_empty() {
         settings.provider.model = crate::models::default_model();
     }
-    if settings.provider.request_timeout_ms == 0
-        || settings.provider.request_timeout_ms == LEGACY_DEFAULT_TIMEOUT_MS
-    {
+    if settings.provider.request_timeout_ms == 0 {
         settings.provider.request_timeout_ms = crate::models::default_timeout_ms();
     }
     if matches!(settings.provider.context_window_tokens, Some(0)) {
@@ -189,7 +208,7 @@ pub(super) fn normalize_settings(settings: &mut AppSettings, paths: &AppPaths) {
         if p.model.trim().is_empty() {
             p.model = crate::models::default_model();
         }
-        if p.request_timeout_ms == 0 || p.request_timeout_ms == LEGACY_DEFAULT_TIMEOUT_MS {
+        if p.request_timeout_ms == 0 {
             p.request_timeout_ms = crate::models::default_timeout_ms();
         }
         if matches!(p.context_window_tokens, Some(0)) {
@@ -240,6 +259,8 @@ pub fn load_settings_with_context(context: &StorageContext) -> Result<AppSetting
         decrypt_api_keys_with_fallback(&mut parsed);
         // Migrate legacy single provider into providers list.
         parsed.migrate_providers();
+        // One-time default repairs (revision-gated; see apply_settings_migrations).
+        apply_settings_migrations(&mut parsed);
 
         normalize_settings(&mut parsed, paths);
         let warnings = parsed.validate();
@@ -617,6 +638,42 @@ mod tests {
         s.provider.request_timeout_ms = 0;
         normalize_settings(&mut s, &paths);
         assert_eq!(s.provider.request_timeout_ms, default_timeout_ms());
+    }
+
+    #[test]
+    fn normalize_preserves_explicit_legacy_default_timeout() {
+        // After the one-time migration, a user who deliberately re-enters
+        // the old 60s default must keep it — normalize only repairs zero,
+        // never overrides a chosen value.
+        let paths = make_paths(None);
+        let mut s = make_settings("/v");
+        s.provider.request_timeout_ms = LEGACY_DEFAULT_TIMEOUT_MS;
+        normalize_settings(&mut s, &paths);
+        assert_eq!(s.provider.request_timeout_ms, LEGACY_DEFAULT_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn migration_bumps_legacy_default_timeout_once() {
+        // Pre-v0.7.43 file (revision 0) still on the old 60s default: both
+        // the legacy single provider and every entry in the multi-provider
+        // list are bumped to the current default exactly once.
+        let mut s = make_settings("/v");
+        s.settings_revision = 0;
+        s.provider.request_timeout_ms = LEGACY_DEFAULT_TIMEOUT_MS;
+        s.providers = vec![ProviderConfig {
+            name: "p".into(),
+            request_timeout_ms: LEGACY_DEFAULT_TIMEOUT_MS,
+            ..ProviderConfig::default()
+        }];
+        apply_settings_migrations(&mut s);
+        assert_eq!(s.provider.request_timeout_ms, default_timeout_ms());
+        assert_eq!(s.providers[0].request_timeout_ms, default_timeout_ms());
+        assert_eq!(s.settings_revision, crate::models::SETTINGS_REVISION);
+
+        // Once migrated, a deliberate 60s survives later loads.
+        s.provider.request_timeout_ms = LEGACY_DEFAULT_TIMEOUT_MS;
+        apply_settings_migrations(&mut s);
+        assert_eq!(s.provider.request_timeout_ms, LEGACY_DEFAULT_TIMEOUT_MS);
     }
 
     #[test]

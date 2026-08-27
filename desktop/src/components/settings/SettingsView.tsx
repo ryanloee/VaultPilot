@@ -314,7 +314,7 @@ export function SettingsView() {
                 type="number"
                 value={active.requestTimeoutMs}
                 onChange={(e) =>
-                  updateProvider({ requestTimeoutMs: Number(e.target.value) || 60000 })
+                  updateProvider({ requestTimeoutMs: Number(e.target.value) || 120000 })
                 }
               />
             </Field>

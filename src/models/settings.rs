@@ -261,7 +261,17 @@ pub struct AppSettings {
     /// The value is a template name from `<vault>/.vaultpilot/templates/`.
     #[serde(default)]
     pub default_template: Option<String>,
+    /// Schema revision for one-time settings migrations. Revision 1 = the
+    /// 60s→120s default-timeout repair (v0.7.43). Old files deserialize to 0
+    /// and are migrated once on load; a deliberate value chosen afterwards
+    /// is preserved because normalize/save never touch migrated defaults.
+    #[serde(default)]
+    pub settings_revision: u32,
 }
+
+/// Current [`AppSettings`] schema revision. Bump when adding a one-time
+/// migration in `apply_settings_migrations` (storage layer).
+pub const SETTINGS_REVISION: u32 = 1;
 
 /// A single persisted tab entry for WinUI multi-tab support (#3700).
 ///
@@ -346,6 +356,7 @@ impl Default for AppSettings {
             session_tabs: Vec::new(),
             active_tab_index: None,
             default_template: None,
+            settings_revision: SETTINGS_REVISION,
         }
     }
 }
@@ -712,6 +723,7 @@ mod tests {
             session_tabs: Vec::new(),
             active_tab_index: None,
             default_template: None,
+            settings_revision: SETTINGS_REVISION,
         };
         let json = serde_json::to_string(&settings).expect("serialize");
         assert!(json.contains("\"vaultDir\""));
@@ -721,6 +733,7 @@ mod tests {
         assert!(json.contains("\"contextWindowTokens\""));
         assert!(json.contains("\"maxOutputTokens\""));
         assert!(json.contains("\"autoCheckUpdates\""));
+        assert!(json.contains("\"settingsRevision\""));
         assert!(json.contains("\"autoWakeEnabled\""));
         assert!(json.contains("\"autoWakeIntervalMinutes\""));
         assert!(json.contains("\"autoWakeModel\""));

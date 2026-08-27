@@ -1167,6 +1167,7 @@ mod tests {
             session_tabs: Vec::new(),
             active_tab_index: None,
             default_template: None,
+            settings_revision: crate::models::SETTINGS_REVISION,
         };
 
         let _saved = save_settings_with_context(&ctx, custom.clone()).expect("save settings");

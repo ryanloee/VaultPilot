@@ -50,6 +50,8 @@ export type AppSettings = {
   /** Auto-number note headings in the renderer (1 / 1.1 / 1.1.2…) (#4062). */
   headingNumbering?: boolean;
   embeddingProvider?: string;
+  /** Settings schema revision for one-time migrations — round-trip only. */
+  settingsRevision?: number;
 };
 
 /** Mirrors vaultpilot_lib::ai::connectivity::ProviderConnectionResult (#3480). */

@@ -11,6 +11,7 @@ pub use settings::{
     default_auto_check_updates, default_auto_wake_enabled, default_auto_wake_end_time,
     default_auto_wake_interval_minutes, default_auto_wake_model, default_auto_wake_prompt,
     default_auto_wake_start_time, default_compression_threshold, AppSettings, ModelRoutingConfig,
+    SETTINGS_REVISION,
 };
 
 use serde::{Deserialize, Serialize};

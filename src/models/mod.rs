@@ -385,6 +385,11 @@ pub struct ChatAttachment {
     pub path: String,
     #[serde(default)]
     pub name: String,
+    /// MIME type (e.g. `image/png`). Empty on legacy turns persisted before
+    /// this field existed — consumers must fall back to extension sniffing
+    /// (#4084: history turns rendered images as file cards without it).
+    #[serde(default, rename = "type")]
+    pub mime: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

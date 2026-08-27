@@ -100,4 +100,5 @@ mod issue_3960_recovery_rpc;
 mod issue_3984_rec_restore_containment;
 mod issue_3992_uri_safety_gate;
 mod issue_4066_backlinks_path_form;
+mod issue_4067_pair_accept_response_decodable;
 mod issue_914_related_notes;

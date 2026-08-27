@@ -51,6 +51,7 @@ pub fn run() {
             // than a silent crash inside the first command.
             let state = AppState::new().expect("failed to initialize app state");
             app.manage(state.clone());
+            #[cfg(desktop)]
             let scheduler_storage = state.storage.clone();
             let discovery_storage = state.storage.clone();
 
@@ -61,6 +62,10 @@ pub fn run() {
             // executor, so rules created in the app silently never fired).
             // It runs for the whole app session on the Tauri async runtime;
             // close-to-tray keeps the process (and thus the scheduler) alive.
+            // Mobile: skipped — the OS kills backgrounded apps anyway, so a
+            // tick loop would only burn battery; rules fire again once a
+            // desktop instance (or the CLI) is running.
+            #[cfg(desktop)]
             tauri::async_runtime::spawn(async move {
                 let executor =
                     vaultpilot_lib::orchestration::trigger_executor::TriggerExecutor::new(
@@ -106,10 +111,9 @@ pub fn run() {
                                     "VaultPilot 配对成功".to_string(),
                                     format!("「{hostname}」已与本设备配对"),
                                 ),
-                                SyncPairingEvent::Rejected { reason } => (
-                                    "VaultPilot 配对被拒绝".to_string(),
-                                    reason.clone(),
-                                ),
+                                SyncPairingEvent::Rejected { reason } => {
+                                    ("VaultPilot 配对被拒绝".to_string(), reason.clone())
+                                }
                             };
                             let _ = sync_app_handle
                                 .notification()

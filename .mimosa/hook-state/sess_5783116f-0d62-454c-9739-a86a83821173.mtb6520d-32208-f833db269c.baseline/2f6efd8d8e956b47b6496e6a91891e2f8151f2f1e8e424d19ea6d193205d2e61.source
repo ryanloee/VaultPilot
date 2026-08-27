@@ -48,6 +48,19 @@ function AttachmentImage({ attachment }: { attachment: ChatAttachment }) {
   );
 }
 
+/**
+ * Image check with legacy-data fallback (#4084): turns persisted before the
+ * backend stamped `type` on attachments carry only `path`/`name`, so we also
+ * sniff the file extension — otherwise history renders images as file cards.
+ */
+const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif)$/i;
+
+function isImageAttachment(a: ChatAttachment): boolean {
+  if (a.type) return a.type.startsWith("image/");
+  const target = a.name || a.path || "";
+  return IMAGE_EXTENSIONS.test(target.split("?")[0]);
+}
+
 export function MessageBubble({ turn }: { turn: ChatTurn }) {
   const isUser = turn.role === "user";
   const attachments = turn.attachments?.filter((a) => a.dataUrl || a.path) ?? [];
@@ -65,7 +78,7 @@ export function MessageBubble({ turn }: { turn: ChatTurn }) {
         {attachments.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-2">
             {attachments.map((a, i) =>
-              a.type?.startsWith("image/") ? (
+              isImageAttachment(a) ? (
                 <AttachmentImage key={i} attachment={a} />
               ) : (
                 <div

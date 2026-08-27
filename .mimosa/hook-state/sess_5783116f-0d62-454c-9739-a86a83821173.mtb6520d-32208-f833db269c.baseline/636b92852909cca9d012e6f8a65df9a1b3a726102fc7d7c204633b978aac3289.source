@@ -23,6 +23,7 @@ base64 = "0.23"
 chrono = "0.4"
 tokio = { version = "1", features = ["sync"] }
 anyhow = "1"
+tauri-plugin-notification = "2"
 # ★ Direct dependency on the existing backend library — zero IPC.
 # Every #[tauri::command] calls vaultpilot_lib functions in-process.
 # (The crate is published as package `vaultpilot`; its lib name is

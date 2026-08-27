@@ -1,0 +1,72 @@
+{
+  "schemaVersion": "mimosa-finding-ledger-batch/v1",
+  "batchId": "stop-20260825T045645754Z-21816-7e4f5064fc65",
+  "runId": "20260825T045645754Z-21816-7e4f5064fc65",
+  "runStatus": "completed",
+  "coverage": {
+    "status": "complete",
+    "reasons": []
+  },
+  "source": {
+    "component": "zcode-hook",
+    "operationId": "Stop"
+  },
+  "revision": "dd1196077846ca8eab526490ab88c62141f479d1",
+  "diffHash": "ed944a1a64360b65be4199746ac7314bbc8d5d2919a149927bf1db646709b33f",
+  "rulesVersion": "unavailable",
+  "sessionHash": "6cf9a23203d74cbee32de8a7ad79f951ea1ae313fb61933bdd32e8d7cade3e11",
+  "reportRef": ".mimosa/reports/task-review-sess_5783116f-0d62-454c-9739-a86a83821173-20260825T045645754Z-21816-7e4f5064fc65.json",
+  "events": [
+    {
+      "eventId": "hook-a557341d2d387d0dfbaf839f2d04efec",
+      "findingId": "mimosa-b73dc32058cb9b87859c80c7",
+      "type": "finding_observed",
+      "at": "2026-08-25T04:56:45.754Z",
+      "identity": {
+        "projectRelativeFile": "desktop/package.json",
+        "ruleId": "mimosa.supply.version-range",
+        "codeEvidenceHash": "3225df7c28b4e21fbe65e20a1ab0b1b5d126e8e189947130fa1a18c9c2b77575",
+        "confidence": "stable"
+      },
+      "scope": "direct",
+      "line": 22,
+      "endLine": 22,
+      "reasonCode": "observe",
+      "reportedToAgent": false,
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "evidenceHash": "3225df7c28b4e21fbe65e20a1ab0b1b5d126e8e189947130fa1a18c9c2b77575"
+      },
+      "sequence": 0
+    },
+    {
+      "eventId": "hook-ee3a6b3be6a4dfb70328e0a79f34e6e2",
+      "findingId": "mimosa-ed95c85efcc24006c90fb6f6",
+      "type": "finding_observed",
+      "at": "2026-08-25T04:56:45.754Z",
+      "identity": {
+        "projectRelativeFile": "desktop/package.json",
+        "ruleId": "mimosa.supply.version-range",
+        "codeEvidenceHash": "a584756a0a81663bd9074941b68ad953d5b55f847a008691bb8c62aab1886b64",
+        "confidence": "stable"
+      },
+      "scope": "direct",
+      "line": 27,
+      "endLine": 27,
+      "reasonCode": "observe",
+      "reportedToAgent": false,
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "evidenceHash": "a584756a0a81663bd9074941b68ad953d5b55f847a008691bb8c62aab1886b64"
+      },
+      "sequence": 1
+    }
+  ],
+  "observedFindingIds": [],
+  "verifiedFiles": [],
+  "recordedAt": "2026-08-25T04:56:46.165Z"
+}

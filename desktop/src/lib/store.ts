@@ -133,6 +133,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   error: null,
 
   load: async () => {
+    // An in-flight send keeps optimistic turns in memory that are NOT on disk
+    // yet (persistence happens after the AI replies). Reloading from disk now
+    // would silently DELETE the user's just-sent message — skip until idle.
+    if (get().sending) return;
     try {
       const state = await api.loadChatState();
       const sessionId = state.currentSessionId;
@@ -167,6 +171,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const history: ConversationTurn[] = get().turns.map((t) => ({ role: t.role, text: t.text }));
     set((s) => ({ turns: [...s.turns, userTurn] }));
 
+    // Persist the optimistic user message IMMEDIATELY — if the app closes or
+    // the AI call takes minutes, the message must survive (#chat-durability).
+    {
+      const snapshot = get();
+      if (snapshot.chatState) {
+        const sessions = snapshot.chatState.sessions.map((sess) =>
+          sess.id === sessionId ? { ...sess, turns: snapshot.turns } : sess
+        );
+        useChatStore.setState({ chatState: { ...snapshot.chatState, sessions } });
+        void persistChatState(useChatStore.getState);
+      }
+    }
+
     // Snapshot the initiating session's turn list right after the optimistic
     // append — the reply is appended to this snapshot, never to whatever
     // session happens to be selected when the response arrives.
@@ -179,6 +196,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         role: "assistant",
         text: result.answer,
       };
+      // Keep the agent's visible reasoning trace attached for collapsible display.
+      const trace = (result as { thinkingTrace?: unknown }).thinkingTrace;
+      if (trace) assistantTurn.thinking = trace;
       const stillOnInitiatingSession = get().currentSessionId === sessionId;
       set((s) => {
         const chatState = s.chatState;

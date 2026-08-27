@@ -298,6 +298,23 @@ export const mockApi = {
     conflicts: number;
     errors: string[];
   }> => ({ pulled: 0, pushed: 0, conflicts: 0, errors: [] }),
+  getPeerManifest: async (): Promise<
+    Array<{ path: string; sha256: string; mtimeMs: number }>
+  > => [],
+  listLocalManifest: async (): Promise<
+    Array<{ path: string; sha256: string; mtimeMs: number }>
+  > => [],
+  syncSelected: async (
+    _ip: string,
+    _deviceId: string,
+    _pull?: string[],
+    _push?: string[]
+  ): Promise<{
+    pulled: number;
+    pushed: number;
+    conflicts: number;
+    errors: string[];
+  }> => ({ pulled: 0, pushed: 0, conflicts: 0, errors: [] }),
   loadNote: async (id: string): Promise<NoteDocument> => {
     const doc = noteDocs[id];
     if (!doc) throw new Error(`note not found: ${id}`);

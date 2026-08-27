@@ -364,8 +364,33 @@ fn build_chat_attachments(paths: &[String]) -> Vec<ChatAttachment> {
                 .and_then(|value| value.to_str())
                 .unwrap_or("image")
                 .to_string(),
+            mime: mime_from_path(path),
         })
         .collect()
+}
+
+/// Sniff a MIME type from the file extension. Only used to decorate chat
+/// attachments (the UI decides image vs file card rendering); unknown
+/// extensions map to an empty string and the frontend falls back to its own
+/// extension check.
+fn mime_from_path(path: &str) -> String {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        "heic" | "heif" => "image/heic",
+        "webm" => "audio/webm",
+        _ => "",
+    }
+    .to_string()
 }
 
 fn build_chat_turn(
@@ -745,10 +770,12 @@ mod tests {
             ChatAttachment {
                 path: "a.png".into(),
                 name: "a.png".into(),
+                mime: "image/png".into(),
             },
             ChatAttachment {
                 path: "b.png".into(),
                 name: "b.png".into(),
+                mime: "image/png".into(),
             },
         ];
         let text_tokens = estimate_tokens_for_text(Some("hello"));
@@ -801,6 +828,7 @@ mod tests {
             attachments: vec![ChatAttachment {
                 path: "a.png".into(),
                 name: "photo.png".into(),
+                mime: "image/png".into(),
             }],
             ..Default::default()
         };
@@ -993,6 +1021,50 @@ mod tests {
         assert_eq!(atts[0].name, "image");
     }
 
+    // ── attachment mime (#4084) ─────────────────────────────────────
+    // History turns persisted before the `type` field existed must still
+    // deserialize (serde default), and newly built attachments carry a mime
+    // so the UI renders images instead of file cards after a reload.
+
+    #[test]
+    fn build_attachments_sniffs_mime_from_extension() {
+        let atts = build_chat_attachments(&[
+            "/tmp/photo.jpg".into(),
+            "/tmp/shot.PNG".into(),
+            "/tmp/voice.webm".into(),
+            "/tmp/data.xyz".into(),
+        ]);
+        assert_eq!(atts[0].mime, "image/jpeg");
+        assert_eq!(
+            atts[1].mime, "image/png",
+            "extension sniffing is case-insensitive"
+        );
+        assert_eq!(atts[2].mime, "audio/webm");
+        assert_eq!(
+            atts[3].mime, "",
+            "unknown extension → empty, frontend falls back"
+        );
+    }
+
+    #[test]
+    fn legacy_attachment_json_without_type_deserializes() {
+        let legacy = r#"[{"path":"/vault/a.png","name":"a.png"}]"#;
+        let atts: Vec<crate::models::ChatAttachment> =
+            serde_json::from_str(legacy).expect("pre-#4084 chat history must keep deserializing");
+        assert_eq!(atts[0].path, "/vault/a.png");
+        assert_eq!(atts[0].mime, "");
+    }
+
+    #[test]
+    fn attachment_serializes_type_for_frontend() {
+        let att = build_chat_attachments(&["/tmp/p.png".into()]).remove(0);
+        let v = serde_json::to_value(&att).unwrap();
+        assert_eq!(
+            v["type"], "image/png",
+            "frontend reads a.type for image detection"
+        );
+    }
+
     // ── build_chat_session_title CJK (#1488) ─────────────────────
 
     #[test]
@@ -1054,6 +1126,7 @@ mod tests {
                 attachments: vec![ChatAttachment {
                     path: "a.png".into(),
                     name: "a.png".into(),
+                    mime: "image/png".into(),
                 }],
                 ..Default::default()
             }],
@@ -1073,6 +1146,7 @@ mod tests {
             attachments: vec![ChatAttachment {
                 path: "a.png".into(),
                 name: String::new(), // empty name should be filtered
+                mime: String::new(),
             }],
             ..Default::default()
         };
@@ -1102,6 +1176,7 @@ mod tests {
             attachments: vec![ChatAttachment {
                 path: "a".into(),
                 name: "img.png".into(),
+                mime: "image/png".into(),
             }],
             citations: vec![AnswerCitation {
                 title: "Ref".into(),
@@ -1456,14 +1531,17 @@ mod tests {
             ChatAttachment {
                 path: "a.png".into(),
                 name: "a.png".into(),
+                mime: "image/png".into(),
             },
             ChatAttachment {
                 path: "b.png".into(),
                 name: "b.png".into(),
+                mime: "image/png".into(),
             },
             ChatAttachment {
                 path: "c.png".into(),
                 name: "c.png".into(),
+                mime: "image/png".into(),
             },
         ];
         let tokens = estimate_turn_tokens("text", &attachments);
@@ -1476,6 +1554,7 @@ mod tests {
         let attachments = vec![ChatAttachment {
             path: "a".into(),
             name: "a".into(),
+            mime: String::new(),
         }];
         let tokens = estimate_turn_tokens("你好世界", &attachments);
         // 4 CJK chars = 8 tokens, + 1200

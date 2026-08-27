@@ -19,7 +19,8 @@ use tauri::{Emitter, Manager, WindowEvent};
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init());
 
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
@@ -50,6 +51,7 @@ pub fn run() {
             // than a silent crash inside the first command.
             let state = AppState::new().expect("failed to initialize app state");
             app.manage(state.clone());
+            #[cfg(desktop)]
             let scheduler_storage = state.storage.clone();
             let discovery_storage = state.storage.clone();
 
@@ -60,6 +62,10 @@ pub fn run() {
             // executor, so rules created in the app silently never fired).
             // It runs for the whole app session on the Tauri async runtime;
             // close-to-tray keeps the process (and thus the scheduler) alive.
+            // Mobile: skipped — the OS kills backgrounded apps anyway, so a
+            // tick loop would only burn battery; rules fire again once a
+            // desktop instance (or the CLI) is running.
+            #[cfg(desktop)]
             tauri::async_runtime::spawn(async move {
                 let executor =
                     vaultpilot_lib::orchestration::trigger_executor::TriggerExecutor::new(
@@ -86,11 +92,37 @@ pub fn run() {
                         .unwrap_or(0);
                     (count as usize, storage.vault_dir_name())
                 };
-                let on_event: Arc<
-                    dyn Fn(vaultpilot_lib::sync::SyncPairingEvent) + Send + Sync,
-                > = Arc::new(move |e| {
-                    let _ = sync_app_handle.emit("sync-pairing", e);
-                });
+                let on_event: Arc<dyn Fn(vaultpilot_lib::sync::SyncPairingEvent) + Send + Sync> =
+                    Arc::new(move |e| {
+                        let _ = sync_app_handle.emit("sync-pairing", e.clone());
+                        // Native OS notification (Windows toast / Android
+                        // notification) so a pairing attempt is still visible
+                        // when the window is hidden in the tray. When visible,
+                        // the in-app banner in SyncPanel is enough.
+                        let visible = sync_app_handle
+                            .get_webview_window("main")
+                            .map(|w| w.is_visible().unwrap_or(false))
+                            .unwrap_or(false);
+                        if !visible {
+                            use tauri_plugin_notification::NotificationExt;
+                            use vaultpilot_lib::sync::SyncPairingEvent;
+                            let (title, body) = match &e {
+                                SyncPairingEvent::Accepted { hostname, .. } => (
+                                    "VaultPilot 配对成功".to_string(),
+                                    format!("「{hostname}」已与本设备配对"),
+                                ),
+                                SyncPairingEvent::Rejected { reason } => {
+                                    ("VaultPilot 配对被拒绝".to_string(), reason.clone())
+                                }
+                            };
+                            let _ = sync_app_handle
+                                .notification()
+                                .builder()
+                                .title(title)
+                                .body(body)
+                                .show();
+                        }
+                    });
                 vaultpilot_lib::sync::start_sync_server(note_count, vault_name, on_event).await;
             });
 
@@ -206,6 +238,9 @@ pub fn run() {
             commands::sync::remove_sync_peer,
             commands::sync::complete_pairing,
             commands::sync::sync_with_peer,
+            commands::sync::get_peer_manifest,
+            commands::sync::list_local_manifest,
+            commands::sync::sync_selected,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

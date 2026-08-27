@@ -172,7 +172,10 @@ export function NotesView() {
       {/* Notes list */}
       <ScrollArea
         className={cn(
-          "w-full shrink-0 border-r border-border md:w-72",
+          // min-h-0 lets this flex item actually shrink so its own
+          // overflow-auto kicks in — otherwise a long list is clipped by
+          // body{overflow:hidden} and touch/wheel scrolling dies (#4068).
+          "min-h-0 w-full flex-1 border-r border-border md:w-72 md:flex-none",
           mobileDetail && "hidden md:block"
         )}
       >
@@ -223,7 +226,7 @@ export function NotesView() {
       {/* Note detail / editor */}
       <div
         className={cn(
-          "flex min-w-0 flex-1 flex-col",
+          "flex min-h-0 min-w-0 flex-1 flex-col",
           !mobileDetail && "hidden md:flex"
         )}
       >
@@ -245,7 +248,7 @@ export function NotesView() {
             <Textarea
               value={draftBody}
               onChange={(e) => setDraftBody(e.target.value)}
-              className="flex-1 font-mono text-sm"
+              className="min-h-0 flex-1 font-mono text-sm"
               placeholder="笔记内容（Markdown）"
             />
             <div className="flex justify-end gap-2">
@@ -287,8 +290,8 @@ export function NotesView() {
                 </Button>
               </div>
             </div>
-            <ScrollArea className="flex-1">
-              <article className="mx-auto max-w-3xl p-4 md:p-6">
+            <ScrollArea className="min-h-0 flex-1">
+              <article className="mx-auto max-w-3xl select-text p-4 md:p-6">
                 {current.body ? (
                   <Markdown content={current.body} numberHeadings={settings?.headingNumbering} />
                 ) : (

@@ -221,12 +221,7 @@ pub async fn complete_pairing(remote_ip: &str, pair_code: &str) -> Result<PeerDe
         .build()?;
     let resp = client
         .post(&url)
-        .json(&serde_json::json!({
-            "deviceId": my_id.device_id,
-            "hostname": my_id.hostname,
-            "platform": my_id.platform,
-            "token": my_id.token,
-        }))
+        .json(&pair_request_body(&my_id))
         .send()
         .await
         .map_err(|e| anyhow!("配对请求失败：{e}"))?;
@@ -284,7 +279,10 @@ pub async fn sync_with_peer(
 
     let remote_manifest: Vec<ManifestEntry> = client
         .get(format!("{base}/sync/manifest"))
-        .query(&[("device", my_id.device_id.as_str()), ("token", my_id.token.as_str())])
+        .query(&[
+            ("device", my_id.device_id.as_str()),
+            ("token", my_id.token.as_str()),
+        ])
         .send()
         .await
         .map_err(|e| anyhow!("获取对方清单失败：{e}"))?
@@ -299,8 +297,10 @@ pub async fn sync_with_peer(
 
     let local_map: HashMap<&str, &ManifestEntry> =
         local.iter().map(|e| (e.path.as_str(), e)).collect();
-    let remote_map: HashMap<&str, &ManifestEntry> =
-        remote_manifest.iter().map(|e| (e.path.as_str(), e)).collect();
+    let remote_map: HashMap<&str, &ManifestEntry> = remote_manifest
+        .iter()
+        .map(|e| (e.path.as_str(), e))
+        .collect();
 
     // Selective-sync filter: when `mode == "selected"` and `includes` is
     // non-empty, keep only paths equal to or nested under one of the prefixes.
@@ -396,6 +396,170 @@ pub async fn sync_with_peer(
                     }
                 }
             }
+        }
+    }
+
+    update_peer_last_sync(&peer.device_id);
+    Ok(result)
+}
+
+// ── Selective (directional) sync ────────────────────────────────────────────
+
+/// Per-direction path selection for [`sync_with_peer_selection`]. Paths are
+/// exact vault-relative entries (`notes/foo.md`), as listed by the manifests.
+#[derive(Debug, Clone, Default)]
+pub struct SyncSelection {
+    /// Files to download from the peer.
+    pub pull: Vec<String>,
+    /// Files to send to the peer.
+    pub push: Vec<String>,
+}
+
+/// The peer's vault manifest — what a selective-sync picker offers for
+/// download. Authenticated with our own identity.
+pub async fn fetch_peer_manifest(remote_ip: &str) -> Result<Vec<ManifestEntry>> {
+    let my_id = get_identity()?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?;
+    let base = format!("http://{remote_ip}:{SYNC_PORT}");
+    client
+        .get(format!("{base}/sync/manifest"))
+        .query(&[
+            ("device", my_id.device_id.as_str()),
+            ("token", my_id.token.as_str()),
+        ])
+        .send()
+        .await
+        .map_err(|e| anyhow!("获取对方清单失败：{e}"))?
+        .error_for_status()
+        .map_err(|e| anyhow!("获取对方清单被拒绝：{e}（可能需要重新配对）"))?
+        .json()
+        .await
+        .map_err(|e| anyhow!("解析对方清单失败：{e}"))
+}
+
+/// This vault's manifest — what a selective-sync picker offers for sending.
+pub fn local_manifest() -> Result<Vec<ManifestEntry>> {
+    let st = state().ok_or_else(|| anyhow!("sync state not initialized"))?;
+    Ok(scan_manifest(&st.vault_dir))
+}
+
+/// Sync exactly the files the user picked, per direction.
+///
+/// Pulls every path in `sel.pull` that exists on the peer (identical content
+/// is skipped; divergent content keeps local and stores conflict copies on
+/// both sides, same as full sync). Pushes every existing path in `sel.push`.
+pub async fn sync_with_peer_selection(
+    remote_ip: &str,
+    peer: &PeerDevice,
+    sel: &SyncSelection,
+) -> Result<SyncResult> {
+    if sel.pull.is_empty() && sel.push.is_empty() {
+        return Err(anyhow!("未选择任何要同步的文件"));
+    }
+    let my_id = get_identity()?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?;
+    let base = format!("http://{remote_ip}:{SYNC_PORT}");
+    let st = state().ok_or_else(|| anyhow!("sync state not initialized"))?;
+    let vault_dir = st.vault_dir.clone();
+    let local_map: HashMap<String, ManifestEntry> = local_manifest()?
+        .into_iter()
+        .map(|e| (e.path.clone(), e))
+        .collect();
+
+    let mut result = SyncResult::default();
+
+    // ── Pull ──
+    let need_remote_manifest = !sel.pull.is_empty();
+    let remote_map: HashMap<String, ManifestEntry> = if need_remote_manifest {
+        fetch_peer_manifest(remote_ip)
+            .await?
+            .into_iter()
+            .map(|e| (e.path.clone(), e))
+            .collect()
+    } else {
+        HashMap::new()
+    };
+    for path in &sel.pull {
+        let Some(remote_entry) = remote_map.get(path) else {
+            result.errors.push(format!("对方不存在：{path}"));
+            continue;
+        };
+        match local_map.get(path) {
+            None => match get_remote_file(&client, &base, &my_id, path).await {
+                Ok(data) => {
+                    let dest = match safe_join(&vault_dir, path) {
+                        Some(p) => p,
+                        None => {
+                            result.errors.push(format!("跳过非法路径：{path}"));
+                            continue;
+                        }
+                    };
+                    if let Some(parent) = dest.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    if std::fs::write(&dest, &data).is_ok() {
+                        result.pulled += 1;
+                    } else {
+                        result.errors.push(format!("写入失败：{path}"));
+                    }
+                }
+                Err(_) => result.errors.push(format!("拉取失败：{path}")),
+            },
+            Some(local_entry) if local_entry.sha256 == remote_entry.sha256 => {}
+            Some(_) => {
+                // Both sides changed: keep local here, park the peer's copy as
+                // a conflict file locally and push ours as one there.
+                if let Ok(data) = get_remote_file(&client, &base, &my_id, path).await {
+                    let cp = conflict_path(&vault_dir, path, &peer.hostname);
+                    if let Some(parent) = cp.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    if std::fs::write(&cp, &data).is_ok() {
+                        if let Some(local_src) = safe_join(&vault_dir, path) {
+                            if let Ok(local_data) = std::fs::read(&local_src) {
+                                let _ = put_remote_file(
+                                    &client,
+                                    &base,
+                                    &my_id,
+                                    &conflict_rel(path, &my_id.hostname),
+                                    &local_data,
+                                )
+                                .await;
+                            }
+                        }
+                        result.conflicts += 1;
+                    } else {
+                        result.errors.push(format!("冲突副本写入失败：{path}"));
+                    }
+                } else {
+                    result.errors.push(format!("冲突拉取失败：{path}"));
+                }
+            }
+        }
+    }
+
+    // ── Push ──
+    for path in &sel.push {
+        let Some(src) = safe_join(&vault_dir, path) else {
+            result.errors.push(format!("跳过非法路径：{path}"));
+            continue;
+        };
+        match std::fs::read(&src) {
+            Ok(data) => {
+                if put_remote_file(&client, &base, &my_id, path, &data)
+                    .await
+                    .is_ok()
+                {
+                    result.pushed += 1;
+                } else {
+                    result.errors.push(format!("推送失败：{path}"));
+                }
+            }
+            Err(_) => result.errors.push(format!("本地读取失败：{path}")),
         }
     }
 
@@ -653,7 +817,15 @@ pub async fn start_sync_server(
     match tokio::net::TcpListener::bind(addr).await {
         Ok(listener) => {
             tracing::info!(%addr, "sync server started");
-            if let Err(e) = axum::serve(listener, app).await {
+            // ConnectInfo lets /pair/accept record the initiator's IP, so the
+            // acceptor can later reach out to sync (the initiator already
+            // knows our address — it dialed us).
+            if let Err(e) = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            {
                 tracing::warn!(error = %e, "sync server stopped");
             }
         }
@@ -669,6 +841,7 @@ struct PairCodeQuery {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PairAcceptBody {
     device_id: String,
     hostname: String,
@@ -702,15 +875,72 @@ fn authorized(device: &str, token: &str) -> bool {
 }
 
 fn err_response(code: axum::http::StatusCode, msg: &str) -> axum::response::Response {
-    (
-        code,
-        axum::Json(serde_json::json!({ "error": msg })),
-    )
-        .into_response()
+    (code, axum::Json(serde_json::json!({ "error": msg }))).into_response()
+}
+
+/// JSON body the initiator POSTs to `/pair/accept`.
+///
+/// Carries BOTH key styles — `deviceId` (new, camelCase peers) and
+/// `device_id` (legacy peers whose `PairAcceptBody` predates
+/// `#[serde(rename_all = "camelCase")]` and rejects camelCase with 422).
+/// `hostname`/`platform`/`token` are single words, identical in both
+/// conventions. serde ignores unknown keys, so every version accepts this.
+pub(crate) fn pair_request_body(id: &LocalIdentity) -> serde_json::Value {
+    serde_json::json!({
+        "deviceId": id.device_id,
+        "device_id": id.device_id,
+        "hostname": id.hostname,
+        "platform": id.platform,
+        "token": id.token,
+    })
+}
+
+/// JSON body returned by `/pair/accept` on success.
+///
+/// The initiator decodes this as its own `PeerDevice` (see
+/// `complete_pairing`), so it must carry every required field — including
+/// `addedAt`. REGRESSION (#4067): the response used to omit `addedAt`, so
+/// `resp.json::<PeerDevice>()` always failed with "error decoding response
+/// body"; only the acceptor recorded the pairing and every later sync was
+/// rejected 403 on that side. Extra fields are ignored by older clients
+/// (serde skips unknown keys), so this stays wire-compatible both ways.
+pub(crate) fn pair_accept_success_json(id: &LocalIdentity) -> serde_json::Value {
+    serde_json::json!({
+        "deviceId": id.device_id,
+        "hostname": id.hostname,
+        "platform": id.platform,
+        "token": id.token,
+        "ip": serde_json::Value::Null,
+        "addedAt": now_rfc3339(),
+        "lastSyncAt": serde_json::Value::Null,
+    })
+}
+
+/// Build the peer record the *acceptor* persists when a pairing handshake
+/// arrives. `remote_addr` is the TCP peer address (no port) — recorded so the
+/// acceptor can initiate sync later; REGRESSION (#4067 follow-up): it used to
+/// be hardcoded to None, so acceptor-side「同步」always failed with "该设备无 IP 记录".
+pub(crate) fn acceptor_peer_from_request(
+    device_id: &str,
+    hostname: &str,
+    platform: &str,
+    token: &str,
+    remote_addr: Option<std::net::SocketAddr>,
+) -> PeerDevice {
+    PeerDevice {
+        device_id: device_id.to_string(),
+        hostname: hostname.to_string(),
+        platform: platform.to_string(),
+        token: token.to_string(),
+        ip: remote_addr.map(|a| a.ip().to_string()),
+        added_at: now_rfc3339(),
+        last_sync_at: None,
+    }
 }
 
 async fn pair_accept_handler(
     axum::extract::Query(q): axum::extract::Query<PairCodeQuery>,
+    axum::extract::ConnectInfo(remote_addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     axum::extract::Json(body): axum::extract::Json<PairAcceptBody>,
 ) -> axum::response::Response {
     let st = match state() {
@@ -743,20 +973,21 @@ async fn pair_accept_handler(
         );
     }
     // The acceptor records the initiator as a peer (it learns the initiator's
-    // identity from the request body).
-    if let Err(e) = add_peer(PeerDevice {
-        device_id: body.device_id.clone(),
-        hostname: body.hostname.clone(),
-        platform: body.platform.clone(),
-        token: body.token.clone(),
-        ip: None,
-        added_at: now_rfc3339(),
-        last_sync_at: None,
-    }) {
+    // identity from the request body, and its address from the TCP connection).
+    if let Err(e) = add_peer(acceptor_peer_from_request(
+        &body.device_id,
+        &body.hostname,
+        &body.platform,
+        &body.token,
+        Some(remote_addr),
+    )) {
         emit_pairing(SyncPairingEvent::Rejected {
             reason: format!("记录配对失败：{e}"),
         });
-        return err_response(axum::http::StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+        return err_response(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            &e.to_string(),
+        );
     }
     emit_pairing(SyncPairingEvent::Accepted {
         hostname: body.hostname.clone(),
@@ -766,15 +997,13 @@ async fn pair_accept_handler(
     match get_identity() {
         Ok(id) => (
             axum::http::StatusCode::OK,
-            axum::Json(serde_json::json!({
-                "deviceId": id.device_id,
-                "hostname": id.hostname,
-                "platform": id.platform,
-                "token": id.token,
-            })),
+            axum::Json(pair_accept_success_json(&id)),
         )
             .into_response(),
-        Err(e) => err_response(axum::http::StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => err_response(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            &e.to_string(),
+        ),
     }
 }
 
@@ -856,7 +1085,10 @@ async fn sync_file_put_handler(
             axum::Json(serde_json::json!({ "ok": true })),
         )
             .into_response(),
-        Err(e) => err_response(axum::http::StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => err_response(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            &e.to_string(),
+        ),
     }
 }
 

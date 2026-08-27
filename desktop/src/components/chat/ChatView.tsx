@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { MessageBubble } from "./MessageBubble";
+import { Waveform } from "./Waveform";
 import { FileIcon, ImageIcon, MicIcon, PlusIcon, StopIcon } from "@/components/layout/icons";
 import { cn } from "@/lib/utils";
 
@@ -25,6 +26,39 @@ export function dataUrlToBase64(dataUrl: string): string {
   return comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
 }
 
+/** Live "thinking" indicator: shows current stage + a running elapsed timer so
+ *  long AI calls never look frozen. */
+function ThinkingIndicator({ detail }: { detail: string | null }) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const started = Date.now();
+    const timer = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
+  const ss = String(elapsed % 60).padStart(2, "0");
+
+  return (
+    <div className="flex justify-start px-4 py-3">
+      <div className="max-w-[80%] rounded-2xl rounded-bl-md border border-border bg-card px-4 py-2.5">
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
+            {detail ?? "正在思考…"}
+          </span>
+          <span className="font-mono text-xs text-muted-foreground/70">{mm}:{ss}</span>
+        </div>
+        {elapsed >= 30 && (
+          <p className="mt-1 text-[11px] text-muted-foreground/60">
+            复杂问题可能需要较长时间 — 你可以切换页面，回复仍会送达当前会话
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function ChatView() {
   const { chatState, currentSessionId, turns, sending, status, error, load, send, newSession, selectSession } =
     useChatStore();
@@ -40,6 +74,9 @@ export function ChatView() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
 
   useEffect(() => {
     load();
@@ -99,12 +136,23 @@ export function ChatView() {
   };
 
   // ── Voice input: record → transcribe (STT) (#4074) ──────────────────────
+  // The stream also feeds an AnalyserNode so the waveform canvas can show
+  // live input levels — without that feedback the user can't tell whether
+  // the mic is actually picking anything up (#4085).
+  const teardownAnalyser = () => {
+    analyserRef.current = null;
+    const ctx = audioCtxRef.current;
+    audioCtxRef.current = null;
+    if (ctx && ctx.state !== "closed") void ctx.close().catch(() => {});
+  };
+
   const stopRecording = () => {
     try {
       mediaRecorderRef.current?.stop();
     } catch {
       /* already stopped */
     }
+    teardownAnalyser();
   };
 
   const startRecording = async () => {
@@ -115,6 +163,20 @@ export function ChatView() {
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Wire the level meter (separate from the recorder's stream usage; the
+      // analyser is NOT connected to destination, so no echo/feedback).
+      try {
+        const audioCtx = new AudioContext();
+        const source = audioCtx.createMediaStreamSource(stream);
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 512;
+        analyser.smoothingTimeConstant = 0.75;
+        source.connect(analyser);
+        audioCtxRef.current = audioCtx;
+        analyserRef.current = analyser;
+      } catch {
+        /* waveform is cosmetic — recording proceeds without it */
+      }
       const recorder = new MediaRecorder(stream);
       chunksRef.current = [];
       recorder.ondataavailable = (e) => {
@@ -122,20 +184,31 @@ export function ChatView() {
       };
       recorder.onstop = () => {
         stream.getTracks().forEach((t) => t.stop());
+        teardownAnalyser();
         void handleRecordingDone();
       };
       recorder.onerror = () => {
         stream.getTracks().forEach((t) => t.stop());
+        teardownAnalyser();
         setRecording(false);
         setActionError("录音失败（麦克风被占用或权限被拒）");
       };
       mediaRecorderRef.current = recorder;
       recorder.start();
+      setRecordingSeconds(0);
       setRecording(true);
     } catch (e) {
       setActionError(`无法访问麦克风：${String(e)}（请在系统设置中允许录音权限）`);
     }
   };
+
+  // Elapsed-time counter while recording (interval, not rAF, to avoid
+  // re-rendering the whole view per animation frame).
+  useEffect(() => {
+    if (!recording) return;
+    const t = window.setInterval(() => setRecordingSeconds((s) => s + 1), 1000);
+    return () => window.clearInterval(t);
+  }, [recording]);
 
   const handleRecordingDone = async () => {
     setRecording(false);
@@ -200,20 +273,7 @@ export function ChatView() {
           {turns.map((m, i) => (
             <MessageBubble key={m.id ?? i} turn={m} />
           ))}
-          {sending && (
-            <div className="flex justify-start px-4 py-3">
-              <div className="max-w-[80%] rounded-2xl rounded-bl-md border border-border bg-card px-4 py-2.5">
-                {status ? (
-                  <span className="text-xs text-muted-foreground">{status.detail}</span>
-                ) : (
-                  <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground" />
-                    正在思考…
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
+          {sending && <ThinkingIndicator detail={status?.detail ?? null} />}
           {(error || actionError) && (
             <div className="mx-auto my-2 max-w-3xl px-4">
               <p className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
@@ -226,6 +286,18 @@ export function ChatView() {
 
       {/* Composer */}
       <div className="border-t border-border bg-background p-3">
+        {/* Live recording feedback: elapsed time + real-time mic level so the
+            user can see voice is actually being captured (#4085). */}
+        {recording && (
+          <div className="mx-auto mb-2 flex max-w-3xl items-center gap-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-1.5">
+            <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-destructive" />
+            <span className="shrink-0 font-mono text-xs text-destructive">
+              {Math.floor(recordingSeconds / 60)}:{String(recordingSeconds % 60).padStart(2, "0")}
+            </span>
+            <Waveform analyserRef={analyserRef} active={recording} className="h-9 min-w-0 flex-1" />
+            <span className="shrink-0 text-xs text-muted-foreground">点击 ⏹ 结束</span>
+          </div>
+        )}
         <div className="mx-auto flex max-w-3xl items-end gap-2">
           {pendingAttachment && (
             <div className="relative shrink-0">

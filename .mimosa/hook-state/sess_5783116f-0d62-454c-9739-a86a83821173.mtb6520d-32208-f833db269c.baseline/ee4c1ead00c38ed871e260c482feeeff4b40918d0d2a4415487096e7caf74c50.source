@@ -38,8 +38,215 @@ type SyncResult = {
 
 type SyncMode = "full" | "selected";
 
+type ManifestEntryDto = { path: string; sha256: string; mtimeMs: number };
+
 const platformIcon = (p: string) =>
   p === "windows" ? "💻" : p === "linux" ? "🐧" : "📱";
+
+/** One checkbox column of the selective-sync dialog (top-level so its
+ * filter input keeps focus across re-renders). */
+function ManifestColumn({
+  title,
+  hint,
+  entries,
+  filter,
+  setFilter,
+  sel,
+  setSel,
+}: {
+  title: string;
+  hint: string;
+  entries: ManifestEntryDto[] | null;
+  filter: string;
+  setFilter: (v: string) => void;
+  sel: Set<string>;
+  setSel: React.Dispatch<React.SetStateAction<Set<string>>>;
+}) {
+  const shown = (entries ?? []).filter((e) =>
+    e.path.toLowerCase().includes(filter.toLowerCase())
+  );
+  const toggle = (path: string) =>
+    setSel((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  return (
+    <div className="flex flex-col min-w-0">
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <span className="text-xs font-semibold">{title}</span>
+        {entries && (
+          <button
+            className="text-[11px] text-muted-foreground hover:text-foreground"
+            onClick={() =>
+              setSel(
+                sel.size >= shown.length && shown.length > 0
+                  ? new Set()
+                  : new Set(shown.map((e) => e.path))
+              )
+            }
+          >
+            {sel.size >= shown.length && shown.length > 0 ? "清空" : "全选"}
+          </button>
+        )}
+      </div>
+      <div className="text-[11px] text-muted-foreground mb-1">{hint}</div>
+      <input
+        value={filter}
+        onChange={(e) => setFilter(e.target.value)}
+        placeholder="过滤路径…"
+        className="mb-1 rounded-md border border-border bg-background px-2 py-1 text-xs font-mono"
+      />
+      {!entries ? (
+        <div className="text-xs text-muted-foreground py-4 text-center">
+          加载中…
+        </div>
+      ) : shown.length === 0 ? (
+        <div className="text-xs text-muted-foreground py-4 text-center">
+          没有文件
+        </div>
+      ) : (
+        <ul className="max-h-72 overflow-auto rounded-md border border-border divide-y divide-border/60">
+          {shown.map((e) => (
+            <li key={e.path}>
+              <label className="flex items-center gap-2 px-2 py-1.5 cursor-pointer hover:bg-muted/50">
+                <input
+                  type="checkbox"
+                  checked={sel.has(e.path)}
+                  onChange={() => toggle(e.path)}
+                />
+                <span
+                  className="text-xs truncate"
+                  title={`${e.path}\n${new Date(e.mtimeMs).toLocaleString()}`}
+                >
+                  {e.path}
+                </span>
+                <span className="ml-auto text-[10px] text-muted-foreground shrink-0 pl-2">
+                  {new Date(e.mtimeMs).toLocaleDateString()}
+                </span>
+              </label>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** Two-column picker: which of the peer's files to download, which local
+ * files to send. Opened from「同步」when the mode is 选择性同步. */
+function SelectiveSyncDialog({
+  peer,
+  onClose,
+  onDone,
+}: {
+  peer: PeerDevice;
+  onClose: () => void;
+  onDone: (r: SyncResult) => void;
+}) {
+  const [remote, setRemote] = useState<ManifestEntryDto[] | null>(null);
+  const [local, setLocal] = useState<ManifestEntryDto[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [pullSel, setPullSel] = useState<Set<string>>(new Set());
+  const [pushSel, setPushSel] = useState<Set<string>>(new Set());
+  const [filterRemote, setFilterRemote] = useState("");
+  const [filterLocal, setFilterLocal] = useState("");
+  const [running, setRunning] = useState(false);
+
+  useEffect(() => {
+    if (!peer.ip) {
+      setErr("该设备无 IP 记录，请重新配对或手动指定 IP");
+      return;
+    }
+    void api
+      .getPeerManifest(peer.ip)
+      .then(setRemote)
+      .catch((e) => setErr(`获取对方清单失败：${e}`));
+    void api
+      .listLocalManifest()
+      .then(setLocal)
+      .catch((e) => setErr(`获取本机清单失败：${e}`));
+  }, [peer]);
+
+  const run = async () => {
+    setRunning(true);
+    setErr(null);
+    try {
+      const r = await api.syncSelected(
+        peer.ip ?? "",
+        peer.deviceId,
+        [...pullSel],
+        [...pushSel]
+      );
+      onDone(r);
+      onClose();
+    } catch (e) {
+      setErr(`同步失败：${e}`);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-background rounded-lg border border-border shadow-lg w-full max-w-3xl max-h-[85vh] overflow-auto p-4 space-y-3"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div>
+          <h3 className="text-sm font-semibold">选择性同步 · {peer.hostname}</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            勾选要从对方下载的笔记和要发送给对方的笔记，两边互不影响；内容冲突的下载会保留本机并把对方版本存为 conflict 副本。
+          </p>
+        </div>
+
+        {err && (
+          <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            {err}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <ManifestColumn
+            title={`对方的笔记（下载 ${pullSel.size}）`}
+            hint={`来自 ${peer.hostname} 的 Vault`}
+            entries={remote}
+            filter={filterRemote}
+            setFilter={setFilterRemote}
+            sel={pullSel}
+            setSel={setPullSel}
+          />
+          <ManifestColumn
+            title={`本机的笔记（发送 ${pushSel.size}）`}
+            hint="当前设备的 Vault"
+            entries={local}
+            filter={filterLocal}
+            setFilter={setFilterLocal}
+            sel={pushSel}
+            setSel={setPushSel}
+          />
+        </div>
+
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <Button size="sm" variant="ghost" onClick={onClose} disabled={running}>
+            取消
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => void run()}
+            disabled={running || (pullSel.size === 0 && pushSel.size === 0)}
+          >
+            {running ? "同步中…" : `开始同步（↓${pullSel.size} ↑${pushSel.size}）`}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function DiscoveredCard({
   device,
@@ -199,7 +406,7 @@ export function SyncPanel({ vaultDir }: { vaultDir: string }) {
   const [syncResult, setSyncResult] = useState<Record<string, SyncResult>>({});
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [mode, setMode] = useState<Record<string, SyncMode>>({});
-  const [includes, setIncludes] = useState<Record<string, string>>({});
+  const [selectingPeer, setSelectingPeer] = useState<PeerDevice | null>(null);
 
   const refreshPeers = async () => {
     try {
@@ -233,18 +440,15 @@ export function SyncPanel({ vaultDir }: { vaultDir: string }) {
   };
 
   const doSync = async (peer: PeerDevice) => {
+    const m = mode[peer.deviceId] ?? "full";
+    if (m === "selected") {
+      setSelectingPeer(peer);
+      return;
+    }
     setSyncingId(peer.deviceId);
     setMsg(null);
     try {
-      const m = mode[peer.deviceId] ?? "full";
-      const inc =
-        m === "selected"
-          ? (includes[peer.deviceId] ?? "")
-              .split(",")
-              .map((s) => s.trim())
-              .filter(Boolean)
-          : [];
-      const r = await api.syncWithPeer(peer.ip ?? "", peer.deviceId, m, inc);
+      const r = await api.syncWithPeer(peer.ip ?? "", peer.deviceId, "full", []);
       setSyncResult((prev) => ({ ...prev, [peer.deviceId]: r }));
       await refreshPeers();
     } catch (e) {
@@ -452,25 +656,42 @@ export function SyncPanel({ vaultDir }: { vaultDir: string }) {
                 onClick={() => void doSync(p)}
                 disabled={syncingId === p.deviceId}
               >
-                {syncingId === p.deviceId ? "同步中…" : "同步"}
+                {syncingId === p.deviceId
+                  ? "同步中…"
+                  : mode[p.deviceId] === "selected"
+                    ? "选择笔记并同步…"
+                    : "同步"}
               </Button>
               <Button size="sm" variant="ghost" onClick={() => void removePeer(p.deviceId)}>
                 移除
               </Button>
             </div>
             {mode[p.deviceId] === "selected" && (
-              <input
-                value={includes[p.deviceId] ?? ""}
-                onChange={(e) =>
-                  setIncludes((prev) => ({ ...prev, [p.deviceId]: e.target.value }))
-                }
-                placeholder="只同步这些目录（逗号分隔，如 notes,journal），留空=全部"
-                className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-sm font-mono"
-              />
+              <p className="text-[11px] text-muted-foreground">
+                点击「同步」后弹窗勾选：从对方下载哪些笔记、把本机哪些笔记发送给对方。
+              </p>
             )}
           </div>
         ))}
       </div>
+
+      {selectingPeer && (
+        <SelectiveSyncDialog
+          peer={selectingPeer}
+          onClose={() => setSelectingPeer(null)}
+          onDone={(r) => {
+            setSyncResult((prev) => ({
+              ...prev,
+              [selectingPeer.deviceId]: r,
+            }));
+            setMsg(
+              `选择性同步完成：下载 ${r.pulled} · 发送 ${r.pushed} · 冲突 ${r.conflicts}` +
+                (r.errors.length > 0 ? ` · 失败 ${r.errors.length}` : "")
+            );
+            void refreshPeers();
+          }}
+        />
+      )}
 
       <div className="flex items-center gap-2">
         <Button size="sm" variant="outline" onClick={check} disabled={checking}>

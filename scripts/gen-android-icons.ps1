@@ -4,20 +4,43 @@
 #     66.7% visible zone so the rim survives launcher masks)
 #   - adaptive background color: #0A2854 (the logo's own dark navy fill), so
 #     any mask-shape corner blends into the circle instead of showing white
+#
+# Usage: drop a NEW transparent-background source at
+#   mipmap-xxxhdpi/ic_launcher_foreground.png (circle anywhere on the
+#   canvas), then run this script — the circle bounds are auto-detected
+#   via an alpha scan, so re-running is idempotent and works after the
+#   foreground has already been regenerated.
 Add-Type -AssemblyName System.Drawing
 $root = 'D:\code\VaultPilot\desktop\src-tauri\icons\android'
 
-# Source: clean circle logo = center crop of the xxxhdpi foreground (432px,
-# circle bounds measured at (50,50)-(381,381), side 332).
 $src = [System.Drawing.Bitmap]::FromFile("$root\mipmap-xxxhdpi\ic_launcher_foreground.png")
-$cropSide = 332
-$srcOff = (( $src.Width - $cropSide ) / 2)  # 50
+$cx = [int]($src.Width / 2)
+$cy = [int]($src.Height / 2)
+# Auto-detect the opaque circle's bounding box: scan inward from each edge
+# along the center row/column for the first non-transparent pixel.
+$left = 0
+while ($left -lt $src.Width -and $src.GetPixel($left, $cy).A -lt 16) { $left++ }
+$right = $src.Width - 1
+while ($right -ge 0 -and $src.GetPixel($right, $cy).A -lt 16) { $right-- }
+$top = 0
+while ($top -lt $src.Height -and $src.GetPixel($cx, $top).A -lt 16) { $top++ }
+$bottom = $src.Height - 1
+while ($bottom -ge 0 -and $src.GetPixel($cx, $bottom).A -lt 16) { $bottom-- }
+if ($right -le $left -or $bottom -le $top) {
+    throw "no opaque circle found in the source foreground PNG"
+}
+# Use the smaller dimension and re-center on the detected bounds so the
+# crop is square and concentric with the circle.
+$cropSide = [Math]::Min($right - $left + 1, $bottom - $top + 1)
+$srcOff = [int](($left + $right) / 2 - $cropSide / 2)
+$srcOffY = [int](($top + $bottom) / 2 - $cropSide / 2)
+Write-Host "detected circle: side $cropSide at ($srcOff,$srcOffY) on $($src.Width)x$($src.Height)"
 $crop = New-Object System.Drawing.Bitmap($cropSide, $cropSide)
 $cg = [System.Drawing.Graphics]::FromImage($crop)
 $cg.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
 $cg.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
 $cg.DrawImage($src, (New-Object System.Drawing.Rectangle(0, 0, $cropSide, $cropSide)),
-    (New-Object System.Drawing.Rectangle($srcOff, $srcOff, $cropSide, $cropSide)),
+    (New-Object System.Drawing.Rectangle($srcOff, $srcOffY, $cropSide, $cropSide)),
     [System.Drawing.GraphicsUnit]::Pixel)
 $cg.Dispose()
 $src.Dispose()

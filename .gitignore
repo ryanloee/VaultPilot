@@ -26,3 +26,6 @@ artifacts/
 
 # Agent runtime sessions
 .omo/
+
+# Mimosa security-scan runtime state (per-session hook history)
+.mimosa/

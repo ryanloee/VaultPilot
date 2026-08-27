@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { api } from "@/lib/tauri";
+import { isTauri } from "@/lib/mock";
 import { cn } from "@/lib/utils";
 import { useUpdaterStore } from "@/lib/store";
 
@@ -7,6 +9,7 @@ type ConnState = "checking" | "ok" | "fail";
 
 export function StatusBar() {
   const [conn, setConn] = useState<ConnState>("checking");
+  const [appVersion, setAppVersion] = useState<string>("");
   const { phase, downloaded, total, version, error } = useUpdaterStore();
 
   useEffect(() => {
@@ -19,6 +22,13 @@ export function StatusBar() {
         if (!cancelled) setConn("fail");
       }
     })();
+    if (isTauri()) {
+      getVersion()
+        .then((v) => {
+          if (!cancelled) setAppVersion(v);
+        })
+        .catch(() => {});
+    }
     return () => {
       cancelled = true;
     };
@@ -69,7 +79,7 @@ export function StatusBar() {
           </span>
         )}
       </div>
-      <span>VaultPilot Desktop · Tauri v2</span>
+      <span>VaultPilot{appVersion ? ` v${appVersion}` : ""} · Tauri v2</span>
     </footer>
   );
 }

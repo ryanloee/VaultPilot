@@ -12,6 +12,36 @@ import { applyAndPersistTheme, savedTheme, type Theme } from "@/lib/theme";
 import type { AppSettings, ProviderConfig, ProviderConnectionResult } from "@/types";
 import { SyncPanel } from "@/components/settings/SyncPanel";
 import { useUpdaterStore } from "@/lib/store";
+import { getVersion } from "@tauri-apps/api/app";
+
+/** Numeric version compare ("0.7.42" vs "0.7.9") — returns true when a > b. */
+function isNewerVersion(candidate: string, current: string): boolean {
+  const parse = (v: string) => v.replace(/^v/, "").split(".").map((n) => parseInt(n, 10) || 0);
+  const a = parse(candidate);
+  const b = parse(current);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if ((a[i] ?? 0) > (b[i] ?? 0)) return true;
+    if ((a[i] ?? 0) < (b[i] ?? 0)) return false;
+  }
+  return false;
+}
+
+/** Query the GitHub release for a newer version (used on mobile where the
+ *  Tauri updater plugin is unavailable). Returns null when up-to-date. */
+async function mobileCheckForUpdate(
+  currentVersion: string
+): Promise<{ version: string; url: string } | null> {
+  const resp = await fetch("https://api.github.com/repos/ryanloee/VaultPilot/releases/latest");
+  if (!resp.ok) throw new Error(`GitHub API ${resp.status}`);
+  const data = await resp.json();
+  const tag: string = data.tag_name ?? "";
+  const latest = tag.replace(/^v/, "");
+  if (!latest || !isNewerVersion(latest, currentVersion)) return null;
+  return {
+    version: latest,
+    url: data.html_url ?? "https://github.com/ryanloee/VaultPilot/releases/latest",
+  };
+}
 
 export function SettingsView() {
   const { settings, loading, error, load, save } = useSettingsStore();
@@ -26,6 +56,10 @@ export function SettingsView() {
   >("idle");
   const [pendingUpdate, setPendingUpdate] = useState<PendingUpdate | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
+  /** Current app version (from the Tauri runtime) shown in the UI. */
+  const [currentVersion, setCurrentVersion] = useState<string>("");
+  /** Mobile update result: newer release found on GitHub. */
+  const [mobileUpdate, setMobileUpdate] = useState<{ version: string; url: string } | null>(null);
 
   // Apply + persist the theme when the user clicks a theme button.
   const selectTheme = (mode: Theme) => {
@@ -45,6 +79,14 @@ export function SettingsView() {
     }).catch(() => {
       if (!cancelled) setUpdaterAvailable(false);
     });
+    getVersion()
+      .then((v) => {
+        if (!cancelled) setCurrentVersion(v);
+        else return;
+      })
+      .catch(() => {
+        /* version unavailable in browser preview */
+      });
     return () => {
       cancelled = true;
     };
@@ -88,20 +130,43 @@ export function SettingsView() {
   const active = draft.providers[draft.activeProviderIndex] ?? draft.provider;
 
   const handleCheckForUpdates = async () => {
-    if (updateState === "checking" || !updaterAvailable) return;
+    if (updateState === "checking") return;
     setUpdateState("checking");
     setUpdateError(null);
     setPendingUpdate(null);
+    setMobileUpdate(null);
     try {
-      const update = await checkForUpdates();
-      if (update) {
-        setPendingUpdate(update);
-        setUpdateState("available");
+      if (updaterAvailable) {
+        // Desktop: native updater flow (download + restart in-app).
+        const update = await checkForUpdates();
+        if (update) {
+          setPendingUpdate(update);
+          setUpdateState("available");
+        } else {
+          setUpdateState("latest");
+        }
       } else {
-        setUpdateState("latest");
+        // Mobile: compare against the GitHub release, then hand off to the
+        // browser for the APK download (updater plugin is desktop-only).
+        const found = await mobileCheckForUpdate(currentVersion);
+        if (found) {
+          setMobileUpdate(found);
+          setUpdateState("available");
+        } else {
+          setUpdateState("latest");
+        }
       }
     } catch (e) {
       setUpdateState("error");
+      setUpdateError(String(e));
+    }
+  };
+
+  const handleOpenDownloadPage = async () => {
+    if (!mobileUpdate) return;
+    try {
+      await api.openExternalUrl(mobileUpdate.url);
+    } catch (e) {
       setUpdateError(String(e));
     }
   };
@@ -299,17 +364,23 @@ export function SettingsView() {
             自动检查更新
           </label>
           <p className="text-xs text-muted-foreground">
-            应用启动时检查 GitHub 是否有新的桌面版本；关闭后不会自动下载更新。
+            应用启动时检查 GitHub 是否有新版本；关闭后不会自动检查。
+            {currentVersion && ` 当前版本 v${currentVersion}。`}
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="outline"
               size="sm"
               onClick={() => void handleCheckForUpdates()}
-              disabled={!updaterAvailable || updateState === "checking"}
+              disabled={updateState === "checking"}
             >
               {updateState === "checking" ? "检查中…" : "立即检查更新"}
             </Button>
+            {currentVersion && (
+              <span className="rounded-md bg-muted px-2 py-1 text-xs font-mono text-muted-foreground">
+                v{currentVersion}
+              </span>
+            )}
             {pendingUpdate && (
               <Button
                 size="sm"
@@ -321,7 +392,9 @@ export function SettingsView() {
             )}
           </div>
           {!updaterAvailable && (
-            <p className="text-xs text-muted-foreground">仅桌面端支持应用内更新。</p>
+            <p className="text-xs text-muted-foreground">
+              手机端通过 GitHub 检查新版本，发现后跳转浏览器下载 APK。
+            </p>
           )}
           {/* Download progress bar — reads from the global updater store so it
               survives page switches and stays in sync with the StatusBar. */}
@@ -358,6 +431,14 @@ export function SettingsView() {
             <p className="text-xs text-primary">
               发现新版本 v{pendingUpdate.version}{pendingUpdate.body ? `：${pendingUpdate.body}` : "。"}
             </p>
+          )}
+          {updateState === "available" && mobileUpdate && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-primary">发现新版本 v{mobileUpdate.version}</span>
+              <Button size="sm" onClick={() => void handleOpenDownloadPage()}>
+                前往下载页面
+              </Button>
+            </div>
           )}
           {updateState === "installed" && (
             <p className="text-xs text-green-600">更新已安装；下次启动将使用新版本。</p>

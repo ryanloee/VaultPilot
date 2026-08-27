@@ -43,6 +43,7 @@ export const tauriApi = {
   // ── system ──
   ping: () => invoke<boolean>("ping"),
   isDesktop: () => invoke<boolean>("is_desktop"),
+  openExternalUrl: (url: string) => invoke<void>("open_external_url", { url }),
 
   // ── settings ──
   getSettings: () => invoke<AppSettings>("get_settings"),

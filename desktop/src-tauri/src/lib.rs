@@ -181,6 +181,7 @@ pub fn run() {
             // system
             commands::system::ping,
             commands::system::is_desktop,
+            commands::system::open_external_url,
             // settings
             commands::settings::get_settings,
             commands::settings::save_settings,

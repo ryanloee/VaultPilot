@@ -26,33 +26,56 @@ export function dataUrlToBase64(dataUrl: string): string {
   return comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
 }
 
-/** Live "thinking" indicator: shows current stage + a running elapsed timer so
- *  long AI calls never look frozen. */
+/** Live "thinking" indicator: current stage + running elapsed timer, with a
+ *  stuck-state escape hatch if nothing moves for 3 minutes. */
 function ThinkingIndicator({ detail }: { detail: string | null }) {
-  const [elapsed, setElapsed] = useState(0);
+  const [now, setNow] = useState(Date.now());
+  const sendingSince = useChatStore((s) => s.sendingSince);
+  const resetSending = useChatStore((s) => s.resetSending);
+
   useEffect(() => {
-    const started = Date.now();
-    const timer = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+    const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
 
+  const started = sendingSince ?? now;
+  const elapsed = Math.max(0, Math.floor((now - started) / 1000));
   const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
   const ss = String(elapsed % 60).padStart(2, "0");
+  // Stuck = 3 min since the last progress event (sendingSince refreshes on
+  // every agent-status event) — long past any healthy provider round-trip.
+  const stuck = elapsed >= 180;
 
   return (
     <div className="flex justify-start px-4 py-3">
       <div className="max-w-[80%] rounded-2xl rounded-bl-md border border-border bg-card px-4 py-2.5">
-        <div className="flex items-center gap-2">
-          <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
-            {detail ?? "正在思考…"}
-          </span>
-          <span className="font-mono text-xs text-muted-foreground/70">{mm}:{ss}</span>
-        </div>
-        {elapsed >= 30 && (
-          <p className="mt-1 text-[11px] text-muted-foreground/60">
-            复杂问题可能需要较长时间 — 你可以切换页面，回复仍会送达当前会话
-          </p>
+        {!stuck ? (
+          <>
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
+                {detail ?? "正在思考…"}
+              </span>
+              <span className="font-mono text-xs text-muted-foreground/70">{mm}:{ss}</span>
+            </div>
+            {elapsed >= 30 && (
+              <p className="mt-1 text-[11px] text-muted-foreground/60">
+                复杂问题可能需要较长时间 — 你可以切换页面，回复仍会送达当前会话
+              </p>
+            )}
+          </>
+        ) : (
+          <div className="space-y-1.5">
+            <p className="text-xs text-destructive">已 {mm}:{ss} 无任何进度 — 请求可能已卡住</p>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={resetSending}>
+                解除占用
+              </Button>
+              <span className="text-[11px] text-muted-foreground/70">
+                解除后可继续发送；晚到的回复仍会写入本会话
+              </span>
+            </div>
+          </div>
         )}
       </div>
     </div>

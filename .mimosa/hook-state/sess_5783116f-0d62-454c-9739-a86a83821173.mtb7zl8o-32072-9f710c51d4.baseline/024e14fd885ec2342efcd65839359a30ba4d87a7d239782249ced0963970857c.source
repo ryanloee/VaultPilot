@@ -105,6 +105,8 @@ type ChatStore = {
   currentSessionId: string | null;
   turns: ChatTurn[];
   sending: boolean;
+  /** Epoch ms when the current send started — drives the stuck-state guard. */
+  sendingSince: number | null;
   status: AgentStatusPayload | null;
   error: string | null;
   load: () => Promise<void>;
@@ -112,6 +114,9 @@ type ChatStore = {
   newSession: () => void;
   selectSession: (id: string) => void;
   deleteSession: (id: string) => void;
+  /** Escape hatch for a wedged `sending` flag (e.g. after HMR/IPC crash):
+   *  clears the guard so the composer works again. */
+  resetSending: () => void;
 };
 
 function emptySession(): ChatSession {
@@ -129,8 +134,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   currentSessionId: null,
   turns: [],
   sending: false,
+  sendingSince: null,
   status: null,
   error: null,
+
+  resetSending: () => set({ sending: false, sendingSince: null, status: null }),
 
   load: async () => {
     // An in-flight send keeps optimistic turns in memory that are NOT on disk
@@ -159,7 +167,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // creates a new one while the AI is still responding (#4060).
     const sessionId = get().currentSessionId;
     if (!sessionId) return;
-    set({ sending: true, status: null, error: null });
+    set({ sending: true, sendingSince: Date.now(), status: null, error: null });
 
     // Append the user message immediately (optimistic).
     const userTurn: ChatTurn = {
@@ -221,7 +229,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     } catch (e) {
       set({ error: String(e) });
     } finally {
-      set({ sending: false, status: null });
+      set({ sending: false, sendingSince: null, status: null });
     }
   },
 
@@ -279,7 +287,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 // Wire up status events from the backend (only once).
 let statusUnlisten: Promise<unknown> | null = null;
 statusUnlisten ??= onAgentStatus((payload) => {
-  useChatStore.setState({ status: payload });
+  // Any incoming progress event proves the backend is alive — refresh the
+  // liveness timestamp so the stuck-state guard doesn't false-positive.
+  useChatStore.setState({ status: payload, sendingSince: Date.now() });
 });
 
 async function persistChatState(get: () => ChatStore) {

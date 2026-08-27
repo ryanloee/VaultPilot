@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.42] - 2026-08-27
+
+### Fixed
+- **LAN pairing always failed with 422**: `PairAcceptBody` was missing `#[serde(rename_all = "camelCase")]` — every pairing request died at JSON parsing before the pair code was even checked.
+- **Chat message disappeared when switching pages mid-send**: `load()` used to reload from disk while a send was in flight, wiping the optimistic (not-yet-persisted) user message. Now the load is skipped while sending, and the optimistic turn is persisted to disk immediately.
+- **Cron validation rejected Sunday (dow=0)**: frontend emitted JS day numbers (0=Sun) but the cron crate requires 1-7; `toCron` now converts 0 → 7.
+
+### Added
+- **Stuck-send escape hatch**: `sendingSince` liveness timestamp refreshed on every agent-status event; after 3 min without progress the indicator shows "请求可能已卡住" with a 解除占用 button so a wedged send can never permanently block the composer.
+- **Live elapsed timer** in the chat thinking indicator + reassurance hint after 30 s that replies arrive even when switching pages.
+- **Collapsible 💭 思考过程 block**: assistant turns carry the reasoning trace (summary + steps), collapsed by default, click to expand.
+
 ## [0.7.35] - 2026-08-22
 
 ### Added

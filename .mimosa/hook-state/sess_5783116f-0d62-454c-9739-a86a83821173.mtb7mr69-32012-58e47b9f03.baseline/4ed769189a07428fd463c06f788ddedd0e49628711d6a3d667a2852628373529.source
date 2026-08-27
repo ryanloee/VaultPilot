@@ -79,6 +79,11 @@ export type ChatTurn = {
   savedNote?: unknown;
   /** Image/attachment payloads attached to this turn (#4074). */
   attachments?: ChatAttachment[];
+  /** Agent reasoning trace (summary + steps) for collapsible display. */
+  thinking?: {
+    summary?: string;
+    steps?: { title: string; detail: string }[];
+  };
   [key: string]: unknown;
 };
 

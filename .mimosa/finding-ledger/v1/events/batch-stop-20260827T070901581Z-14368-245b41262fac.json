@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "mimosa-finding-ledger-batch/v1",
+  "batchId": "stop-20260827T070901581Z-14368-245b41262fac",
+  "runId": "20260827T070901581Z-14368-245b41262fac",
+  "runStatus": "completed",
+  "coverage": {
+    "status": "complete",
+    "reasons": []
+  },
+  "source": {
+    "component": "zcode-hook",
+    "operationId": "Stop"
+  },
+  "revision": "d3ba36288a0d2f2537526c2508d18715c8fd92a9",
+  "diffHash": "9db40ebf725c36f854c8930c90fa12e9454e0ab17a64e41e497dd06ea3264288",
+  "rulesVersion": "unavailable",
+  "sessionHash": "6cf9a23203d74cbee32de8a7ad79f951ea1ae313fb61933bdd32e8d7cade3e11",
+  "reportRef": ".mimosa/reports/task-review-sess_5783116f-0d62-454c-9739-a86a83821173-20260827T070901581Z-14368-245b41262fac.json",
+  "events": [],
+  "observedFindingIds": [],
+  "verifiedFiles": [
+    {
+      "file": "desktop/src/lib/store.ts",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "desktop/src/types/index.ts",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "desktop/src/components/chat/MessageBubble.tsx",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "desktop/src/components/chat/ChatView.tsx",
+      "direct": "complete",
+      "projectContext": "partial"
+    }
+  ],
+  "recordedAt": "2026-08-27T07:09:02.010Z"
+}

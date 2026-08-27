@@ -61,6 +61,39 @@ function isImageAttachment(a: ChatAttachment): boolean {
   return IMAGE_EXTENSIONS.test(target.split("?")[0]);
 }
 
+/** Collapsible agent reasoning trace — collapsed by default, click to expand. */
+function ThinkingBlock({ turn }: { turn: ChatTurn }) {
+  const [open, setOpen] = useState(false);
+  const thinking = turn.thinking;
+  if (!thinking || (!thinking.summary && !thinking.steps?.length)) return null;
+
+  return (
+    <div className="mb-2 rounded-lg border border-border bg-muted/40">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <span>{open ? "▼" : "▶"}</span>
+        <span>💭 思考过程</span>
+        {thinking.summary && !open && (
+          <span className="min-w-0 flex-1 truncate text-left opacity-70">{thinking.summary}</span>
+        )}
+      </button>
+      {open && (
+        <div className="space-y-2 border-t border-border px-3 py-2 text-xs text-muted-foreground">
+          {thinking.summary && <p className="whitespace-pre-wrap">{thinking.summary}</p>}
+          {thinking.steps?.map((s, i) => (
+            <div key={i}>
+              <p className="font-medium text-foreground">{s.title}</p>
+              {s.detail && <p className="mt-0.5 whitespace-pre-wrap">{s.detail}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function MessageBubble({ turn }: { turn: ChatTurn }) {
   const isUser = turn.role === "user";
   const attachments = turn.attachments?.filter((a) => a.dataUrl || a.path) ?? [];
@@ -92,6 +125,8 @@ export function MessageBubble({ turn }: { turn: ChatTurn }) {
             )}
           </div>
         )}
+        {/* Agent reasoning trace (assistant only), collapsible. */}
+        {!isUser && <ThinkingBlock turn={turn} />}
         {/* Both user and assistant turns render markdown — plain text falls
             through react-markdown unchanged, so nothing breaks for
             non-markdown input. */}

@@ -67,6 +67,7 @@ VaultPilot/
 - **No FTS write without `tokenize_cjk_for_fts`** — all `note_fts`/`attachment_fts` writes must bigram-tokenize CJK (`src/storage/search.rs`).
 - **No `parseInt(x) || fallback` for cron fields** — `0` is falsy; use explicit nullish check.
 - **`TriggerAction::ProcessWebhook` from cron** is invalid (no payload) → recorded as failed; `Custom` without `custom_prompt` is config error #2842.
+- **No trailing args after `powershell -Command <script>`** — PowerShell joins them into the script text (never `$args`): a trailing path becomes a bare statement that ShellExecutes the file (opened every OCR'd image in Paint) and `$args[0]` stays null (#4068). Pass data via env var (`OCR_IMAGE_ENV` pattern in `src/storage/notes.rs`).
 
 ## COMMANDS
 ```bash

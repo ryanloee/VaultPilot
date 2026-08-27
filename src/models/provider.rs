@@ -213,8 +213,16 @@ pub fn default_model() -> String {
     "deepseek-v4-flash-free".to_string()
 }
 
+/// Default per-request budget for LLM HTTP calls.
+///
+/// 120s — a grounded answer with RAG context can take 50-70s of server-side
+/// generation; the old 60s total timeout made slow-but-working mobile
+/// networks fail the request right as the answer was finishing, then burn a
+/// retry regenerating from scratch. The per-attempt budget should match the
+/// orchestration layer's AI_CALL_TIMEOUT so one generous attempt fits
+/// instead of failing twice.
 pub fn default_timeout_ms() -> u64 {
-    60_000
+    120_000
 }
 
 // ---------------------------------------------------------------------------

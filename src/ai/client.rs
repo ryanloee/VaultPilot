@@ -87,6 +87,11 @@ pub(super) fn get_or_build_client(
 
     let mut builder = reqwest::Client::builder()
         .timeout(Duration::from_millis(timeout_ms))
+        // Fail fast when the network path is dead (flaky mobile Wi-Fi, captive
+        // portals) instead of hanging the full 60 s request timeout on a TCP
+        // connect that will never complete.
+        .connect_timeout(Duration::from_secs(10))
+        .tcp_keepalive(Duration::from_secs(30))
         .default_headers(headers);
 
     // Pin DNS to the addresses verified by validate_base_url to prevent
@@ -368,14 +373,17 @@ pub(crate) async fn send_request_with_temperature(
             Err(error) => {
                 if should_retry_transport_error(&error) && attempt < 2 {
                     warn!(attempt = attempt + 1, error = %crate::sanitize_error(&error.to_string()), "transport error, retrying");
-                    // Issue #749: add jitter to prevent thundering herd
-                    let base = 2u64.pow(attempt as u32 + 1);
+                    // Issue #749: jitter prevents thundering herd. Millisecond-
+                    // scale backoff (500ms/1s) — multi-second sleeps here used
+                    // to multiply across the ask pipeline's serial LLM rounds
+                    // and made flaky-network requests hang for minutes.
+                    let base = 500u64 * (attempt as u64 + 1);
                     let jitter = SystemTime::now()
                         .duration_since(SystemTime::UNIX_EPOCH)
                         .unwrap_or_default()
-                        .subsec_nanos() as u64
+                        .subsec_millis() as u64
                         % base;
-                    sleep(Duration::from_secs(base + jitter)).await;
+                    sleep(Duration::from_millis(base + jitter)).await;
                     continue;
                 }
                 return Err(anyhow!(format_transport_error(&error, &endpoint)));
@@ -431,18 +439,22 @@ pub(crate) async fn send_request_with_temperature(
                     status = status.as_u16(),
                     "retryable API error, retrying"
                 );
-                // Issue #749: add jitter to prevent thundering herd
-                let base = 2u64.pow(attempt as u32 + 1);
+                // Issue #749: add jitter to prevent thundering herd. Millisecond-
+                // scale backoff (500ms/1s) — matches the transport-error block so
+                // a retryable API error can't stall the ask pipeline for minutes
+                // on a flaky mobile network.
+                let base = 500u64 * (attempt as u64 + 1);
                 // #2559: honor the server's Retry-After directive when present,
                 // taking the max of (retry_after, computed_backoff) so we never
-                // retry sooner than the server asked.
-                let backoff = retry_after.unwrap_or(0).max(base);
+                // retry sooner than the server asked. Retry-After is expressed
+                // in seconds — converted to ms for the sleep below.
+                let backoff = retry_after.unwrap_or(0).saturating_mul(1000).max(base);
                 let jitter = SystemTime::now()
                     .duration_since(SystemTime::UNIX_EPOCH)
                     .unwrap_or_default()
-                    .subsec_nanos() as u64
+                    .subsec_millis() as u64
                     % base;
-                sleep(Duration::from_secs(backoff + jitter)).await;
+                sleep(Duration::from_millis(backoff + jitter)).await;
                 continue;
             }
 
@@ -625,13 +637,14 @@ pub async fn send_request_streaming<'a>(
             Err(error) => {
                 if should_retry_transport_error(&error) && attempt < 2 {
                     warn!(attempt = attempt + 1, error = %crate::sanitize_error(&error.to_string()), "streaming transport error, retrying");
-                    let base = 2u64.pow(attempt as u32 + 1);
+                    // Millisecond-scale backoff; see the non-streaming loop.
+                    let base = 500u64 * (attempt as u64 + 1);
                     let jitter = SystemTime::now()
                         .duration_since(SystemTime::UNIX_EPOCH)
                         .unwrap_or_default()
-                        .subsec_nanos() as u64
+                        .subsec_millis() as u64
                         % base;
-                    sleep(Duration::from_secs(base + jitter)).await;
+                    sleep(Duration::from_millis(base + jitter)).await;
                     continue;
                 }
                 return Err(anyhow!(format_transport_error(&error, &endpoint)));
@@ -665,16 +678,17 @@ pub async fn send_request_streaming<'a>(
                     status = status.as_u16(),
                     "retryable streaming API error, retrying"
                 );
-                let base = 2u64.pow(attempt as u32 + 1);
+                let base = 500u64 * (attempt as u64 + 1);
                 // #2559: honor the server's Retry-After directive, taking the
-                // max of (retry_after, computed_backoff).
-                let backoff = retry_after.unwrap_or(0).max(base);
+                // max of (retry_after, computed_backoff). Retry-After is in
+                // seconds — converted to ms to match the millisecond backoff.
+                let backoff = retry_after.unwrap_or(0).saturating_mul(1000).max(base);
                 let jitter = SystemTime::now()
                     .duration_since(SystemTime::UNIX_EPOCH)
                     .unwrap_or_default()
-                    .subsec_nanos() as u64
+                    .subsec_millis() as u64
                     % base;
-                sleep(Duration::from_secs(backoff + jitter)).await;
+                sleep(Duration::from_millis(backoff + jitter)).await;
                 continue;
             }
 

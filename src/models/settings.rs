@@ -760,7 +760,7 @@ mod tests {
         assert!(settings.auto_wake_end_time.is_empty());
         assert!(settings.auto_wake_prompt.is_empty());
         assert_eq!(default_model(), "deepseek-v4-flash-free");
-        assert_eq!(default_timeout_ms(), 60_000);
+        assert_eq!(default_timeout_ms(), 120_000);
         assert!(default_auto_check_updates());
         // #1928: compression is off by default; threshold defaults to 0.8.
         assert!(!settings.context_compression);

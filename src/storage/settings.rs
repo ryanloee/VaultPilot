@@ -155,6 +155,12 @@ fn load_settings_raw(context: &StorageContext) -> Result<AppSettings> {
     Ok(parsed)
 }
 
+/// The old `default_timeout_ms()` value (60s). Providers still carrying it
+/// were never customized — bump them to the current default so slow-but-
+/// working mobile networks don't fail long generations that used to time
+/// out right as the answer was finishing.
+pub(super) const LEGACY_DEFAULT_TIMEOUT_MS: u64 = 60_000;
+
 pub(super) fn normalize_settings(settings: &mut AppSettings, paths: &AppPaths) {
     if let Some(vault_dir_override) = &paths.vault_dir_override {
         settings.vault_dir = vault_dir_override.to_string_lossy().to_string();
@@ -167,7 +173,9 @@ pub(super) fn normalize_settings(settings: &mut AppSettings, paths: &AppPaths) {
     if settings.provider.model.trim().is_empty() {
         settings.provider.model = crate::models::default_model();
     }
-    if settings.provider.request_timeout_ms == 0 {
+    if settings.provider.request_timeout_ms == 0
+        || settings.provider.request_timeout_ms == LEGACY_DEFAULT_TIMEOUT_MS
+    {
         settings.provider.request_timeout_ms = crate::models::default_timeout_ms();
     }
     if matches!(settings.provider.context_window_tokens, Some(0)) {
@@ -181,7 +189,7 @@ pub(super) fn normalize_settings(settings: &mut AppSettings, paths: &AppPaths) {
         if p.model.trim().is_empty() {
             p.model = crate::models::default_model();
         }
-        if p.request_timeout_ms == 0 {
+        if p.request_timeout_ms == 0 || p.request_timeout_ms == LEGACY_DEFAULT_TIMEOUT_MS {
             p.request_timeout_ms = crate::models::default_timeout_ms();
         }
         if matches!(p.context_window_tokens, Some(0)) {

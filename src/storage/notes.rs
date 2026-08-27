@@ -1968,8 +1968,21 @@ pub fn set_attachment_ocr_text(
     Ok(())
 }
 
+/// Environment variable carrying the image path into the PowerShell OCR
+/// script (#4068).
+///
+/// The path must NOT be passed as a trailing command-line argument: with
+/// `powershell -Command <script> <arg...>` PowerShell joins every trailing
+/// argument into the script text itself. That left `$args[0]` null (so OCR
+/// silently never worked) and made the appended path the script's final
+/// bare statement — which PowerShell ShellExecutes, opening every saved
+/// image attachment in the system's default viewer (Paint). An env var is
+/// immune to both problems and to quoting/injection via crafted filenames.
 #[cfg(target_os = "windows")]
-fn extract_image_text_with_windows_ocr(path: &Path) -> Result<String> {
+const OCR_IMAGE_ENV: &str = "VAULTPILOT_OCR_IMAGE";
+
+#[cfg(target_os = "windows")]
+fn build_ocr_command(path: &Path) -> Command {
     let script = r#"
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $null = [Windows.Storage.StorageFile, Windows.Storage, ContentType=WindowsRuntime]
@@ -1985,7 +1998,8 @@ function Await([object]$Operation, [type]$ResultType) {
   $task = $generic.Invoke($null, @($Operation))
   $task.GetAwaiter().GetResult()
 }
-$imagePath = $args[0]
+$imagePath = $env:VAULTPILOT_OCR_IMAGE
+if ([string]::IsNullOrWhiteSpace($imagePath)) { return }
 $file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($imagePath)) ([Windows.Storage.StorageFile])
 $stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
 $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
@@ -2001,6 +2015,7 @@ if ($null -ne $result -and $null -ne $result.Text) {
 
     let mut command = Command::new("powershell");
     command
+        .env(OCR_IMAGE_ENV, path)
         .args([
             "-NoProfile",
             "-ExecutionPolicy",
@@ -2008,16 +2023,17 @@ if ($null -ne $result -and $null -ne $result.Text) {
             "-Command",
             script,
         ])
-        .arg(path.as_os_str())
         .stdin(std::process::Stdio::null());
 
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
+    use std::os::windows::process::CommandExt;
+    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
 
-    let output = command
+    command
+}
+
+#[cfg(target_os = "windows")]
+fn extract_image_text_with_windows_ocr(path: &Path) -> Result<String> {
+    let output = build_ocr_command(path)
         .output()
         .with_context(|| format!("failed to run Windows OCR for {}", path.display()))?;
 
@@ -2026,6 +2042,61 @@ if ($null -ne $result -and $null -ne $result.Text) {
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod ocr_command_tests {
+    use super::*;
+
+    // REGRESSION: #4068 — trailing `-Command` args are joined into the
+    // script text, never `$args`. The image path must travel via env var.
+    #[test]
+    fn regression_4068_ocr_image_path_via_env_not_trailing_arg() {
+        let cmd = build_ocr_command(Path::new(r"C:\tmp\photo.png"));
+        let args: Vec<&std::ffi::OsStr> = cmd.get_args().collect();
+        let script_pos = args
+            .iter()
+            .position(|a| *a == std::ffi::OsStr::new("-Command"))
+            .expect("-Command flag present");
+        assert_eq!(
+            args.len(),
+            script_pos + 2,
+            "the inline script must be the LAST argument — anything appended is executed as script text"
+        );
+        let carries_env = cmd.get_envs().any(|(k, v)| {
+            k == OCR_IMAGE_ENV && v == Some(std::ffi::OsStr::new(r"C:\tmp\photo.png"))
+        });
+        assert!(carries_env, "image path must travel via {OCR_IMAGE_ENV}");
+    }
+
+    // REGRESSION: #4068 — the old failure mode echoed the file path into
+    // stdout (the bare-path final statement), which then got stored as
+    // OCR text. Real output must be recognized text only — empty for a
+    // 1×1 image — and must never contain the file name.
+    #[test]
+    fn regression_4068_windows_ocr_output_never_echoes_path() {
+        let dir = std::env::temp_dir().join(format!("vp_4068_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Minimal valid 1x1 transparent PNG (same bytes as issue_2936's).
+        let png: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+            0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        let path = dir.join("sentinel4068.png");
+        std::fs::write(&path, png).unwrap();
+
+        let text = extract_image_text(&path).unwrap_or_default();
+        assert!(
+            !text.contains("sentinel4068"),
+            "OCR output must be recognized text, never the echoed file path: {text:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 // ────────────────────────────────────────────────────────

@@ -75,14 +75,110 @@ const DISPATCH_AI_TIMEOUT: Duration = Duration::from_secs(180);
 ///
 /// VaultPilot stores standard 5-field cron (`min hour dom mon dow`), so we
 /// prepend `0 ` for seconds. Expressions that already have 6+ fields are
-/// returned unchanged.
-fn normalize_cron_expr(expr: &str) -> String {
+/// otherwise returned unchanged — except the day-of-week field, which is
+/// always rewritten by [`translate_standard_dow_to_crate`] (#4086).
+pub(crate) fn normalize_cron_expr(expr: &str) -> String {
     let trimmed = expr.trim();
-    let field_count = trimmed.split_whitespace().count();
-    if field_count == 5 {
-        format!("0 {trimmed}")
+    let mut fields: Vec<String> = trimmed.split_whitespace().map(|f| f.to_string()).collect();
+    if fields.len() == 5 {
+        fields.insert(0, "0".to_string());
+    }
+    // dow sits at index 5 (0-based) of `sec min hour dom mon dow [year]`,
+    // i.e. it is the last field only for 5/6-field forms — a 7-field
+    // expression's trailing field is the year and must not be touched.
+    if fields.len() >= 6 {
+        let translated = translate_standard_dow_to_crate(&fields[5]);
+        fields[5] = translated;
+    }
+    fields.join(" ")
+}
+
+/// Map a standard-cron numeric day-of-week (0/7=Sunday, 1=Monday .. 6=Saturday)
+/// to its unambiguous day name.
+fn standard_dow_name(v: u32) -> Option<&'static str> {
+    match v {
+        0 | 7 => Some("SUN"),
+        1 => Some("MON"),
+        2 => Some("TUE"),
+        3 => Some("WED"),
+        4 => Some("THU"),
+        5 => Some("FRI"),
+        6 => Some("SAT"),
+        _ => None,
+    }
+}
+
+/// Translate the day-of-week field of a stored (standard) cron expression
+/// into the `cron` crate's dialect (#4086).
+///
+/// The crate's NUMERIC dow is nonstandard — `1` = Sunday .. `7` = Saturday,
+/// and `0` is rejected outright — while its day NAMES (SUN-SAT) follow the
+/// standard. VaultPilot stores standard cron (what the UI's `toCron`, the
+/// CLI, and every other cron tool emit: 0/7=Sunday, 1=Monday), so without
+/// this translation a "Mon-Fri" rule stored as `1,2,3,4,5` actually fired
+/// Sunday-Thursday. Numeric tokens (values, lists, ranges with optional
+/// steps, including wraparound like `6-1`) are expanded to day names, which
+/// mean the same thing in both dialects. `*` and `*/n` pass through: the
+/// crate's 1-based week also starts on Sunday, so the selected day set is
+/// identical. Tokens containing letters (names) pass through unchanged. An
+/// unparseable numeric token leaves the whole field untouched so
+/// `Schedule::from_str` rejects it and validation surfaces the error.
+fn translate_standard_dow_to_crate(field: &str) -> String {
+    let mut out: Vec<&'static str> = Vec::new();
+    for part in field.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            return field.to_string();
+        }
+        // Names, name ranges, `*`, and `*/n` need no translation.
+        if part.chars().any(|c| c.is_ascii_alphabetic()) || part == "*" || part.starts_with("*/") {
+            return field.to_string();
+        }
+        // `a`, `a-b`, `a-b/n`, or `a/n`.
+        let mut split_step = part.splitn(2, '/');
+        let bounds = split_step.next().unwrap_or("");
+        let step: u32 = match split_step.next() {
+            Some(s) => match s.parse() {
+                Ok(n) if (1..=7).contains(&n) => n,
+                _ => return field.to_string(),
+            },
+            None => 1,
+        };
+        let (start, end) = if let Some((a, b)) = bounds.split_once('-') {
+            match (a.trim().parse(), b.trim().parse()) {
+                (Ok(a), Ok(b)) => (a, b),
+                _ => return field.to_string(),
+            }
+        } else {
+            match bounds.trim().parse::<u32>() {
+                // A bare value with a step (`5/2`) means "starting at 5,
+                // every 2 days to the end of the week" in standard cron.
+                Ok(a) => (a, if step > 1 { 7 } else { a }),
+                Err(_) => return field.to_string(),
+            }
+        };
+        if !(0..=7).contains(&start) || !(0..=7).contains(&end) {
+            return field.to_string();
+        }
+        // Expand cyclically so wraparound ranges (`6-1` = Sat,Sun,Mon) work.
+        let span = ((end + 7 - start) % 7) + 1;
+        let mut i = 0u32;
+        while i < span {
+            let day = (start + i) % 7;
+            if i.is_multiple_of(step) {
+                if let Some(name) = standard_dow_name(day) {
+                    if !out.contains(&name) {
+                        out.push(name);
+                    }
+                }
+            }
+            i += 1;
+        }
+    }
+    if out.is_empty() {
+        field.to_string()
     } else {
-        trimmed.to_string()
+        out.join(",")
     }
 }
 
@@ -944,7 +1040,12 @@ mod tests {
     #[test]
     fn normalize_prepends_seconds_for_5_field_cron() {
         assert_eq!(normalize_cron_expr("0 8 * * *"), "0 0 8 * * *");
-        assert_eq!(normalize_cron_expr("30 9 * * 1-5"), "0 30 9 * * 1-5");
+        // Numeric dow is translated to names (#4086): `1-5` = Mon-Fri in
+        // standard cron, the crate's own numbering is 1=Sunday.
+        assert_eq!(
+            normalize_cron_expr("30 9 * * 1-5"),
+            "0 30 9 * * MON,TUE,WED,THU,FRI"
+        );
     }
 
     #[test]
@@ -999,6 +1100,47 @@ mod tests {
 
     // ── is_rule_due ──
 
+    // REGRESSION: #4086 — the cron crate's NUMERIC dow is nonstandard
+    // (1=Sunday .. 7=Saturday, 0 rejected) while its day NAMES follow the
+    // standard. Stored expressions are standard cron (0/7=Sunday, 1=Monday —
+    // what the UI's toCron and the CLI emit), so normalize_cron_expr rewrites
+    // numeric dow tokens to names. Without it, a "Mon-Fri" rule stored as
+    // `1,2,3,4,5` fired Sun-Thu and Friday never triggered.
+    #[test]
+    fn regression_4086_standard_dow_fires_on_selected_days() {
+        use chrono::TimeZone;
+        // Thursday 2026-08-27 03:00 UTC and the following days.
+        let thu = chrono::Utc.with_ymd_and_hms(2026, 8, 27, 3, 0, 0).unwrap();
+        let fri = chrono::Utc.with_ymd_and_hms(2026, 8, 28, 3, 0, 0).unwrap();
+        let sat = chrono::Utc.with_ymd_and_hms(2026, 8, 29, 3, 0, 0).unwrap();
+        let sun = chrono::Utc.with_ymd_and_hms(2026, 8, 30, 3, 0, 0).unwrap();
+
+        // `1,2,3,4,5` is Mon-Fri in standard cron: next after Thursday is
+        // Friday (the crate alone would answer Sunday).
+        assert_eq!(next_due_time_at("0 3 * * 1,2,3,4,5", thu), Some(fri));
+        // Same for the range form.
+        assert_eq!(next_due_time_at("0 3 * * 1-5", thu), Some(fri));
+        // Standard 0 and 7 both mean Sunday (0 used to be rejected outright).
+        assert_eq!(next_due_time_at("0 3 * * 0", thu), Some(sun));
+        assert_eq!(next_due_time_at("0 3 * * 7", thu), Some(sun));
+        // Names pass through: FRI is Friday in both dialects.
+        assert_eq!(next_due_time_at("0 3 * * FRI", thu), Some(fri));
+        // `*` is identical in both dialects.
+        assert_eq!(next_due_time_at("0 3 * * *", thu), Some(fri));
+        // Saturday-only rule: next after Thursday is Saturday.
+        assert_eq!(next_due_time_at("0 3 * * 6", thu), Some(sat));
+        // Wraparound range 6-1 (Sat, Sun, Mon): next after Thursday is
+        // Saturday.
+        assert_eq!(next_due_time_at("0 3 * * 6-1", thu), Some(sat));
+        // Stepped range 1-5/2 (Mon, Wed, Fri): next after Thursday is Friday.
+        assert_eq!(next_due_time_at("0 3 * * 1-5/2", thu), Some(fri));
+        // Bare value with step 5/2 (Fri, Sun): next after Thursday is Friday.
+        assert_eq!(next_due_time_at("0 3 * * 5/2", thu), Some(fri));
+        // `*/2` passes through and covers Sun,Tue,Thu,Sat in both dialects:
+        // next after Thursday is Saturday.
+        assert_eq!(next_due_time_at("0 3 * * */2", thu), Some(sat));
+    }
+
     #[test]
     fn next_due_time_accepts_comma_separated_dow() {
         // Debug: test multiple dow formats to find what the cron crate accepts.
@@ -1013,14 +1155,14 @@ mod tests {
             next_due_time_at("0 22 * * 1,2,3,4,5", now).is_some(),
             "dow=1,2,3,4,5"
         );
-        // Comma list WITH 0 — the reported bug
+        // Comma list WITH 0 — standard cron allows 0=Sunday; the dow
+        // translation in normalize_cron_expr rewrites it to SUN so the
+        // crate accepts it (#4086).
         let with_zero = next_due_time_at("0 22 * * 0,1,2,3,4", now);
-        if with_zero.is_none() {
-            // 0 is invalid in the cron crate's dow field (1-7 only, 1=Sun).
-            // The frontend generates JS day numbers (0=Sun) — must convert.
-            // For now, document the limitation; the fix is in the frontend toCron.
-            eprintln!("CONFIRMED: dow containing 0 fails (cron crate uses 1-7, not 0-6)");
-        }
+        assert!(
+            with_zero.is_some(),
+            "dow containing 0 must parse after translation"
+        );
         // Range
         assert!(
             next_due_time_at("0 22 * * 1-5", now).is_some(),

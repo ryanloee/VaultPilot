@@ -63,8 +63,13 @@ function utcToLocal(hour: number, minute: number, day: number | null): { h: numb
 
 /** Generate a 5-field UTC cron expression from local UI state. */
 export function toCron(minute: number, hour: number, days: number[]): string {
-  // The cron crate uses 1-7 for day-of-week (never 0) — convert JS day
-  // numbers (0=Sunday, 1-6=Mon-Sat) to cron numbers (1-6=Mon-Sat, 7=Sun).
+  // Stored expressions are STANDARD cron dow (0/7=Sunday, 1=Monday..6=
+  // Saturday). The Rust side (normalize_cron_expr) translates numeric dow
+  // to day names because the `cron` crate's own numbering is nonstandard
+  // (1=Sunday..7=Saturday, 0 rejected) — do NOT "fix" numbers for the
+  // crate here (#4086). JS day numbers (0=Sun, 1-6=Mon-Sat) map to
+  // standard cron as 0 and 1-6; we emit 7 instead of 0 only because both
+  // mean Sunday in standard cron and 7 reads unambiguously.
   // parseDowField reverses this: cron 7 → JS 0 via `% 7`.
   const toCronDay = (jsDay: number): number => (jsDay === 0 ? 7 : jsDay);
   if (days.length === 7) {

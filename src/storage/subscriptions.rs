@@ -438,11 +438,10 @@ pub fn compute_and_update_next_run(
 ) -> Result<String> {
     use std::str::FromStr;
 
-    let full_expr = if cron_expr.split_whitespace().count() == 5 {
-        format!("0 {}", cron_expr)
-    } else {
-        cron_expr.to_string()
-    };
+    // Shared normalization: 5-field -> 6-field plus the standard->crate dow
+    // translation (#4086 — the crate's numeric dow is 1=Sunday, storage is
+    // standard cron 0/7=Sunday).
+    let full_expr = crate::orchestration::trigger_executor::normalize_cron_expr(cron_expr);
 
     match cron::Schedule::from_str(&full_expr) {
         Ok(schedule) => match schedule.upcoming(Utc).next() {

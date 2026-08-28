@@ -115,12 +115,9 @@ fn substitute_placeholders(template: &str, ctx: &SubstitutionContext) -> String 
 fn compute_next_run_time_iso(cron_expr: &str) -> Option<String> {
     use std::str::FromStr;
 
-    // Prepend "0 " to convert 5-field standard cron to 6-field cron crate format.
-    let full_expr = if cron_expr.split_whitespace().count() == 5 {
-        format!("0 {}", cron_expr)
-    } else {
-        cron_expr.to_string()
-    };
+    // Shared normalization: 5-field -> 6-field plus the standard->crate dow
+    // translation (#4086).
+    let full_expr = crate::orchestration::trigger_executor::normalize_cron_expr(cron_expr);
 
     let schedule = cron::Schedule::from_str(&full_expr).ok()?;
     let next = schedule.upcoming(Utc).next()?;

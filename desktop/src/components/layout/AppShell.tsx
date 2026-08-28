@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ActivityBar, type ViewId } from "./ActivityBar";
 import { MobileTabBar } from "./MobileTabBar";
 import { Sidebar } from "./Sidebar";
@@ -8,11 +8,22 @@ import { NotesView } from "@/components/notes/NotesView";
 import { TriggerView } from "@/components/triggers/TriggerView";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { useAutoUpdater } from "@/hooks/useAutoUpdater";
+import { api } from "@/lib/tauri";
 
 export function AppShell() {
   const [view, setView] = useState<ViewId>("chat");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [desktop, setDesktop] = useState(false);
   useAutoUpdater();
+
+  // Resolve platform once on mount — gates desktop-only views.
+  useEffect(() => {
+    let cancelled = false;
+    api.isDesktop().then((v) => {
+      if (!cancelled) setDesktop(v);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
@@ -33,7 +44,7 @@ export function AppShell() {
         <main className="flex min-w-0 flex-1 flex-col">
           {view === "chat" && <ChatView />}
           {view === "notes" && <NotesView />}
-          {view === "triggers" && <TriggerView />}
+          {desktop && view === "triggers" && <TriggerView />}
           {view === "settings" && <SettingsView />}
         </main>
       </div>

@@ -1,11 +1,10 @@
 import { cn } from "@/lib/utils";
-import { ChatIcon, NotesIcon, SettingsIcon, TriggerIcon } from "./icons";
+import { ChatIcon, NotesIcon, SettingsIcon } from "./icons";
 import type { ViewId } from "./ActivityBar";
 
 const items: { id: ViewId; label: string; Icon: typeof ChatIcon }[] = [
   { id: "chat", label: "聊天", Icon: ChatIcon },
   { id: "notes", label: "笔记", Icon: NotesIcon },
-  { id: "triggers", label: "定时唤醒", Icon: TriggerIcon },
   { id: "settings", label: "设置", Icon: SettingsIcon },
 ];
 
@@ -18,7 +17,7 @@ export function MobileTabBar({
   onSelect: (view: ViewId) => void;
 }) {
   return (
-    <nav className="grid shrink-0 grid-cols-4 border-t border-border bg-card pb-[env(safe-area-inset-bottom)] md:hidden">
+    <nav className="grid shrink-0 grid-cols-3 border-t border-border bg-card pb-[env(safe-area-inset-bottom)] md:hidden">
       {items.map(({ id, label, Icon }) => (
         <button
           key={id}

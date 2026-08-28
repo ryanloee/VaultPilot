@@ -1,6 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { useChatStore } from "@/lib/store";
 import { cn, formatDate } from "@/lib/utils";
+import { isTauri } from "@/lib/mock";
 import { TrashIcon } from "./icons";
 
 type SidebarProps = {
@@ -11,10 +13,24 @@ type SidebarProps = {
 export function Sidebar({ collapsed }: SidebarProps) {
   const { chatState, currentSessionId, load, selectSession, newSession, deleteSession } =
     useChatStore();
+  const [appVersion, setAppVersion] = useState<string>("");
 
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    getVersion()
+      .then((v) => {
+        if (!cancelled) setAppVersion(v);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <aside
@@ -70,6 +86,12 @@ export function Sidebar({ collapsed }: SidebarProps) {
           <p className="px-4 py-6 text-center text-xs text-muted-foreground">暂无会话</p>
         )}
       </div>
+
+      {appVersion && (
+        <div className="border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
+          VaultPilot <span className="font-mono">v{appVersion}</span>
+        </div>
+      )}
     </aside>
   );
 }

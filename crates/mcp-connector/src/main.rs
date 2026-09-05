@@ -25,16 +25,83 @@ fn main() -> Result<()> {
         )
         .init();
 
-    let vault_dir = std::env::args()
+    let arg_vault_dir = std::env::args()
         .position(|a| a == "--vault-dir")
-        .and_then(|i| std::env::args().nth(i + 1))
-        .or_else(discover_vault_dir_from_config);
+        .and_then(|i| std::env::args().nth(i + 1));
+    let arg_token = std::env::args()
+        .position(|a| a == "--token")
+        .and_then(|i| std::env::args().nth(i + 1));
+
+    let discovered = discover_mcp_config();
+    let vault_dir = arg_vault_dir.or_else(|| {
+        discovered
+            .as_ref()
+            .and_then(|c| c.vault_dir.clone())
+            .map(|v| {
+                tracing::info!("discovered vault from mcp-config.json: {}", v);
+                v
+            })
+    });
+    // Expected token precedence: CLI arg > mcp-config.json. The proof side is
+    // the VAULTPILOT_MCP_TOKEN env var injected by the MCP client (or the
+    // initialize params `_meta` field, checked per-request).
+    let expected_token = arg_token.or_else(|| {
+        discovered
+            .as_ref()
+            .and_then(|c| c.token.clone())
+            .inspect(|_| tracing::info!("token requirement loaded from mcp-config.json"))
+    });
 
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(run_mcp_stdio(vault_dir))
+    rt.block_on(run_mcp_stdio(vault_dir, expected_token))
 }
 
-fn discover_vault_dir_from_config() -> Option<String> {
+/// Constant-time byte-slice equality (avoids leaking token prefix matches
+/// through timing). Length mismatch returns early — acceptable here, matching
+/// the http_bridge implementation.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// Decide whether this launch / initialize is authorized.
+///
+/// - `expected: None`  — auth not configured; allow (legacy behavior, caller
+///   warns).
+/// - `expected: Some`  — allow only if `provided` (env var at launch, or the
+///   initialize `_meta` field) matches in constant time.
+fn authorize(expected: Option<&str>, provided: Option<&str>) -> Result<(), String> {
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+    match provided {
+        Some(provided) if constant_time_eq(provided.as_bytes(), expected.as_bytes()) => Ok(()),
+        Some(_) => Err(
+            "unauthorized: VAULTPILOT_MCP_TOKEN does not match the configured token".to_string(),
+        ),
+        None => Err(
+            "unauthorized: token required but not provided (set VAULTPILOT_MCP_TOKEN in the client's env)"
+                .to_string(),
+        ),
+    }
+}
+
+/// Extract the token proof an MCP client may attach to `initialize` params
+/// under the reserved `_meta` extension object.
+fn init_meta_token(params: &Value) -> Option<&str> {
+    params
+        .get("_meta")
+        .and_then(|m| m.get("vaultpilotToken"))
+        .and_then(Value::as_str)
+}
+
+fn discover_mcp_config() -> Option<McpConfig> {
     let candidates = [
         std::env::current_dir().unwrap_or_default(),
         dirs_or_home().join("Documents").join("VaultPilotVault"),
@@ -47,16 +114,7 @@ fn discover_vault_dir_from_config() -> Option<String> {
             if config_path.exists() {
                 if let Ok(content) = std::fs::read_to_string(&config_path) {
                     if let Ok(config) = serde_json::from_str::<McpConfig>(&content) {
-                        if let Some(ref vault) = config.vault_dir {
-                            if !vault.is_empty() {
-                                tracing::info!(
-                                    "discovered vault from {}: {}",
-                                    config_path.display(),
-                                    vault
-                                );
-                                return Some(vault.clone());
-                            }
-                        }
+                        return Some(config);
                     }
                 }
             }
@@ -76,7 +134,6 @@ fn dirs_or_home() -> PathBuf {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct McpConfig {
     #[serde(default)]
     vault_dir: Option<String>,
@@ -145,7 +202,7 @@ impl McpResponse {
 
 // --- Main Loop ---
 
-async fn run_mcp_stdio(vault_dir: Option<String>) -> Result<()> {
+async fn run_mcp_stdio(vault_dir: Option<String>, expected_token: Option<String>) -> Result<()> {
     let context = match vault_dir {
         Some(ref dir) => {
             let path = PathBuf::from(dir);
@@ -161,9 +218,24 @@ async fn run_mcp_stdio(vault_dir: Option<String>) -> Result<()> {
     vaultpilot_lib::storage::initialize_storage_with_context(&context)
         .context("failed to initialize storage schema")?;
 
+    // Launch-time fast-fail: a *present but wrong* env proof kills the server
+    // immediately. A missing env proof is fine at this point — the client may
+    // instead present the token per-request in initialize `_meta`.
+    if let Ok(env_proof) = std::env::var("VAULTPILOT_MCP_TOKEN") {
+        authorize(expected_token.as_deref(), Some(env_proof.as_str()))
+            .map_err(|reason| anyhow::anyhow!(reason))?;
+    }
+
     eprintln!("VaultPilot MCP Connector started");
     eprintln!("  vault dir: {}", context.vault_dir().display());
     eprintln!("  protocol: MCP {}", MCP_PROTOCOL_VERSION);
+    match expected_token.as_deref() {
+        Some(_) => eprintln!("  auth: token required (VAULTPILOT_MCP_TOKEN / initialize _meta)"),
+        None => eprintln!(
+            "  auth: WARNING no token configured — any local process can read this vault. \
+             Set \"token\" in mcp-config.json or pass --token to enable."
+        ),
+    }
 
     let mut state = McpServerState::default();
     let stdin = tokio::io::stdin();
@@ -218,30 +290,43 @@ async fn run_mcp_stdio(vault_dir: Option<String>) -> Result<()> {
         let response = match serde_json::from_str::<McpRequest>(&line) {
             Ok(request) => {
                 if request.method == "initialize" && request.jsonrpc == "2.0" {
-                    let id = request.id.unwrap_or(Value::Null);
-                    let requested_version = request
-                        .params
-                        .get("protocolVersion")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    state.initialized = true;
-                    state.protocol_version = negotiate_protocol(requested_version).to_string();
-                    Some(McpResponse::ok(
-                        id,
-                        serde_json::json!({
-                            "protocolVersion": state.protocol_version,
-                            "capabilities": {
-                                "tools": { "listChanged": false },
-                                "resources": { "listChanged": false }
-                            },
-                            "serverInfo": {
-                                "name": "vaultpilot-mcp",
-                                "title": "VaultPilot MCP Connector",
-                                "version": env!("CARGO_PKG_VERSION")
-                            },
-                            "instructions": "VaultPilot MCP Connector provides tools to search, read, write, list, and find related notes in your vault. Also includes GitHub connector tools (list/get issues) when GITHUB_TOKEN is configured."
-                        }),
-                    ))
+                    let id = request.id.clone().unwrap_or(Value::Null);
+                    // Per-request auth: accept either proof — the env var
+                    // (already fast-fail-checked at launch, so present = valid)
+                    // or the initialize params `_meta` token. On failure
+                    // `initialized` stays false, so every later tools/call is
+                    // rejected by the -32002 gate below.
+                    let env_proof = std::env::var("VAULTPILOT_MCP_TOKEN").ok();
+                    let provided = env_proof
+                        .as_deref()
+                        .or_else(|| init_meta_token(&request.params));
+                    if let Err(reason) = authorize(expected_token.as_deref(), provided) {
+                        Some(McpResponse::error(id, -32600, reason, None))
+                    } else {
+                        let requested_version = request
+                            .params
+                            .get("protocolVersion")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        state.initialized = true;
+                        state.protocol_version = negotiate_protocol(requested_version).to_string();
+                        Some(McpResponse::ok(
+                            id,
+                            serde_json::json!({
+                                "protocolVersion": state.protocol_version,
+                                "capabilities": {
+                                    "tools": { "listChanged": false },
+                                    "resources": { "listChanged": false }
+                                },
+                                "serverInfo": {
+                                    "name": "vaultpilot-mcp",
+                                    "title": "VaultPilot MCP Connector",
+                                    "version": env!("CARGO_PKG_VERSION")
+                                },
+                                "instructions": "VaultPilot MCP Connector provides tools to search, read, write, list, and find related notes in your vault. Also includes GitHub connector tools (list/get issues) when GITHUB_TOKEN is configured."
+                            }),
+                        ))
+                    }
                 } else {
                     handle_request(&context, &state, request).await
                 }
@@ -1106,6 +1191,62 @@ fn handle_github_get_issue(arguments: Value) -> Value {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // Test-only stand-in secret — never a real credential.
+    const TEST_TOKEN: &str = "test-token-standin";
+
+    #[test]
+    fn authorize_no_expected_allows_anything() {
+        // Legacy behavior: without a configured token, launch is allowed.
+        assert!(authorize(None, None).is_ok());
+        assert!(authorize(None, Some("anything")).is_ok());
+    }
+
+    #[test]
+    fn authorize_matching_token_passes() {
+        assert!(authorize(Some(TEST_TOKEN), Some(TEST_TOKEN)).is_ok());
+    }
+
+    #[test]
+    fn authorize_wrong_or_missing_token_rejected() {
+        let wrong = authorize(Some(TEST_TOKEN), Some("wrong"));
+        assert!(wrong.is_err());
+        assert!(wrong.unwrap_err().contains("unauthorized"));
+
+        let missing = authorize(Some(TEST_TOKEN), None);
+        assert!(missing.is_err());
+        assert!(missing.unwrap_err().contains("not provided"));
+    }
+
+    #[test]
+    fn authorize_rejects_empty_string_proof() {
+        // A client sending an empty token is "provided" but wrong.
+        assert!(authorize(Some(TEST_TOKEN), Some("")).is_err());
+    }
+
+    #[test]
+    fn init_meta_token_extracts_from_params() {
+        let params = json!({
+            "protocolVersion": "2025-06-18",
+            "_meta": { "vaultpilotToken": TEST_TOKEN }
+        });
+        assert_eq!(init_meta_token(&params), Some(TEST_TOKEN));
+    }
+
+    #[test]
+    fn init_meta_token_absent_meta_or_field() {
+        assert_eq!(init_meta_token(&json!({ "protocolVersion": "x" })), None);
+        assert_eq!(init_meta_token(&json!({ "_meta": { "other": "y" } })), None);
+    }
+
+    #[test]
+    fn constant_time_eq_basics() {
+        assert!(constant_time_eq(b"abc", b"abc"));
+        assert!(!constant_time_eq(b"abc", b"abd"));
+        assert!(!constant_time_eq(b"abc", b"ab"));
+        assert!(!constant_time_eq(b"", b"a"));
+        assert!(constant_time_eq(b"", b""));
+    }
 
     #[test]
     fn test_github_token_not_configured() {

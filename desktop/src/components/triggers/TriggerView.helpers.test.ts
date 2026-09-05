@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toCron, fromCron, detectPreset } from "./TriggerView";
+import { toCron, fromCron, detectPreset, WEEKDAY_PRESETS } from "./TriggerView";
 
 // The cron backend evaluates in UTC while the picker collects local
 // wall-clock time; toCron/fromCron convert between the two. These tests
@@ -70,5 +70,29 @@ describe("detectPreset", () => {
   it("classifies an arbitrary subset as custom", () => {
     expect(detectPreset([1, 3, 5])).toBe("custom");
     expect(detectPreset([0])).toBe("custom");
+  });
+});
+
+// REGRESSION: #4087 — the 每天 preset carried `days: null`, so the
+// selectedDays memo fell through to customDays (whatever days the edit
+// form was opened with). Clicking 每天 then saving wrote the OLD day set
+// back unchanged; the rule list kept showing 工作日.
+describe("WEEKDAY_PRESETS (#4087)", () => {
+  it("every preset carries all seven days — never null", () => {
+    const every = WEEKDAY_PRESETS.find((p) => p.id === "every");
+    expect(every?.days).toEqual([0, 1, 2, 3, 4, 5, 6]);
+  });
+
+  it("selecting 每天 overrides the days the edit form loaded", () => {
+    // Mirror of the component's selectedDays memo: preset.days wins over
+    // customDays. Simulate editing a weekday rule and clicking 每天.
+    const customDays = [1, 2, 3, 4, 5];
+    const every = WEEKDAY_PRESETS.find((p) => p.id === "every")!;
+    const selectedDays = every.days ?? customDays;
+    expect(selectedDays).toHaveLength(7);
+
+    const expr = toCron(0, 6, selectedDays);
+    expect(expr).toMatch(/^\d+ \d+ \* \* \*$/);
+    expect(detectPreset(fromCron(expr).days)).toBe("every");
   });
 });

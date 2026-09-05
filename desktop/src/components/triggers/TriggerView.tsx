@@ -16,8 +16,12 @@ const ACTION_LABELS: Record<string, string> = {
 const DAY_LABELS = ["日", "一", "二", "三", "四", "五", "六"];
 
 type WeekdayPreset = "every" | "weekdays" | "weekends" | "custom";
-const WEEKDAY_PRESETS: { id: WeekdayPreset; label: string; days: number[] | null }[] = [
-  { id: "every", label: "每天", days: null },
+/** Exported for regression tests (#4087). */
+export const WEEKDAY_PRESETS: { id: WeekdayPreset; label: string; days: number[] | null }[] = [
+  // "every" must carry the full 7-day set: `days: null` makes selectedDays
+  // fall through to customDays, so clicking 每天 kept whatever days the edit
+  // form was opened with and the save silently wrote them back unchanged.
+  { id: "every", label: "每天", days: [0, 1, 2, 3, 4, 5, 6] },
   { id: "weekdays", label: "工作日", days: [1, 2, 3, 4, 5] },
   { id: "weekends", label: "周末", days: [0, 6] },
   { id: "custom", label: "自选", days: null },

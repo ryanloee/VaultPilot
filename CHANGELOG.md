@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.47] - 2026-09-05
+
+### Added
+- **集成页面（订阅源 / 邮件 / MCP）**：桌面端新增第五个视图。订阅源支持添加/启停/删除/单个或全部刷新，新条目自动入库为笔记；邮件支持 IMAP 账户管理、立即同步、已导入邮件搜索（桌面端专属）；MCP 提供带令牌生成的客户端配置片段。
+- **Feed 轮询引擎进入 lib**：`vaultpilot_lib::feed_ingest`（解析/高水位去重/入库/SSRF 防护 + DNS pinning），桌面与 CLI 共用同一实现，删除 CLI 私有 `feed_poller.rs`。
+- **MCP stdio 连接器令牌鉴权**：`vaultpilot-mcp` 此前无任何鉴权——任何本地进程拉起即可读取 vault。现在支持 `--token` / `mcp-config.json` 配置期望值，客户端通过 `VAULTPILOT_MCP_TOKEN` 环境变量或 `initialize` 请求的 `_meta.vaultpilotToken` 提供持有证明；错误证明启动即拒绝，initialize 失败则会话保持未初始化（后续 tools/call 全部拒绝）。常量时间比较；未配置令牌保持向后兼容并打警告。
+
 ## [0.7.42] - 2026-08-27
 
 ### Fixed

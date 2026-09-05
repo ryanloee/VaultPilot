@@ -85,8 +85,7 @@ describe("mockApi notes CRUD", () => {
   });
 });
 
-describe("mockApi trigger rules", () => {
-  it("updateTriggerRule returns the rule with the new values", async () => {
+describe("mockApi trigger rules", () => {  it("updateTriggerRule returns the rule with the new values", async () => {
     const updated = await mockApi.updateTriggerRule(
       "mock-trigger-1",
       "改后的回顾",
@@ -101,6 +100,92 @@ describe("mockApi trigger rules", () => {
     expect(updated.triggerConfig).toBe("30 18 * * 1-5");
     expect(updated.action).toBe("custom");
     expect(updated.customPrompt).toBe("总结今天");
+  });
+});
+
+describe("mockApi feeds", () => {
+  it("addFeed then listFeeds contains the new feed", async () => {
+    const feed = await mockApi.addFeed(
+      "https://example.com/new.xml",
+      "New Feed",
+      "rss",
+      "",
+      "tech",
+      30
+    );
+    expect(feed.id).toBeTruthy();
+    expect(feed.url).toBe("https://example.com/new.xml");
+    const feeds = await mockApi.listFeeds();
+    expect(feeds.some((f) => f.id === feed.id)).toBe(true);
+  });
+
+  it("setFeedEnabled toggles and removeFeed deletes", async () => {
+    const feed = await mockApi.addFeed(
+      "https://example.com/toggle.xml",
+      "Toggle",
+      "rss",
+      "",
+      "",
+      60
+    );
+    expect(await mockApi.setFeedEnabled(feed.id, false)).toBe(true);
+    expect((await mockApi.listFeeds()).find((f) => f.id === feed.id)?.enabled).toBe(
+      false
+    );
+    expect(await mockApi.removeFeed(feed.id)).toBe(true);
+    expect((await mockApi.listFeeds()).some((f) => f.id === feed.id)).toBe(false);
+  });
+
+  it("refreshFeeds returns per-feed results", async () => {
+    const results = await mockApi.refreshFeeds();
+    expect(Array.isArray(results)).toBe(true);
+    for (const r of results) {
+      expect(r).toHaveProperty("feedId");
+      expect(r).toHaveProperty("status");
+    }
+  });
+});
+
+describe("mockApi mail accounts", () => {
+  it("addMailAccount then listMailAccounts contains it (no password field)", async () => {
+    const acc = await mockApi.addMailAccount(
+      "Test",
+      "imap.example.com",
+      993,
+      "t@example.com",
+      "secret",
+      true,
+      30
+    );
+    expect(acc.id).toBeTruthy();
+    // The DTO must never carry a password.
+    expect(acc).not.toHaveProperty("password");
+    const accounts = await mockApi.listMailAccounts();
+    expect(accounts.some((a) => a.id === acc.id)).toBe(true);
+  });
+
+  it("syncMailAccount reports counts and updates lastSyncAt", async () => {
+    const acc = await mockApi.addMailAccount(
+      "SyncMe",
+      "imap.example.com",
+      993,
+      "s@example.com",
+      "secret",
+      true,
+      30
+    );
+    const r = await mockApi.syncMailAccount(acc.id);
+    expect(r.accountId).toBe(acc.id);
+    expect(r.fetched + r.imported + r.skippedDuplicates).toBeGreaterThanOrEqual(0);
+    const reread = (await mockApi.listMailAccounts()).find((a) => a.id === acc.id);
+    expect(reread?.lastSyncAt).toBeTruthy();
+    expect(await mockApi.deleteMailAccount(acc.id)).toBe(true);
+  });
+
+  it("searchEmails matches the fixture mail", async () => {
+    const hits = await mockApi.searchEmails("Mock");
+    expect(hits.length).toBeGreaterThanOrEqual(1);
+    expect(hits[0]).toHaveProperty("subject");
   });
 });
 

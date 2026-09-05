@@ -212,3 +212,88 @@ export type AgentStatusEvent = {
     timestamp: string;
   };
 };
+
+// ── Feed Subscriptions (订阅源) ──────────────────────────────────────────
+
+/** Mirrors vaultpilot_lib::models::FeedSubscription (camelCase on the wire). */
+export type FeedSubscription = {
+  id: string;
+  title: string;
+  url: string;
+  kind: string;
+  collection: string;
+  tags: string;
+  intervalMinutes: number;
+  enabled: boolean;
+  lastFetchedAt: string;
+  etag: string;
+  lastModified: string;
+  lastEntryId: string;
+  lastEntryDate: string;
+  /** "success" | "failed" | "skipped" | "" (never polled). */
+  lastStatus: string;
+  lastError: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** Mirrors vaultpilot_lib::feed_ingest::FeedPollResult. */
+export type FeedPollResult = {
+  feedId: string;
+  status: string;
+  newEntries: number;
+  error: string;
+};
+
+// ── Mail Accounts (邮件导入, desktop only) ───────────────────────────────
+
+/** Mirrors the Tauri MailAccountDto — no password field, ever. */
+export type MailAccount = {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  useTls: boolean;
+  syncEnabled: boolean;
+  syncFrequencyMinutes: number;
+  lastSyncAt: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** Mirrors vaultpilot_lib::mail::SyncResult. */
+export type MailSyncResult = {
+  accountId: string;
+  fetched: number;
+  imported: number;
+  skippedDuplicates: number;
+  errors: string[];
+};
+
+/** Mirrors vaultpilot_lib::mail::StoredEmail. */
+export type StoredEmail = {
+  id: string;
+  accountId: string;
+  messageId: string;
+  subject: string;
+  fromAddr: string;
+  toAddrs: string;
+  ccAddrs: string;
+  date: string;
+  bodyText: string;
+  noteId: string;
+  importedAt: string;
+};
+
+// ── Connectors & MCP (集成) ─────────────────────────────────────────────
+
+/** One row of the `connector_catalog()` (webhook / github / slack / email). */
+export type ConnectorInfo = {
+  connectorType: string;
+  label: string;
+  phase: number;
+  auth: string;
+  capabilities: [string, string][];
+  usage: string;
+};

@@ -1,4 +1,3 @@
-mod feed_poller;
 mod http_bridge;
 mod markdown_utils;
 mod mcp_server;
@@ -8333,10 +8332,8 @@ async fn handle_feed(context: &StorageContext, action: &FeedActions) -> Result<V
             Ok(serde_json::json!({ "disabled": ok, "id": id }))
         }
         FeedActions::Refresh => {
-            // html_to_markdown lives in this binary crate (Web Clipper pipeline).
-            let converter: crate::feed_poller::MarkdownConverter =
-                crate::http_bridge::html_to_markdown;
-            let results = crate::feed_poller::poll_all_feeds(context, converter).await;
+            // Shared lib poller (same engine the desktop "全部刷新" uses).
+            let results = vaultpilot_lib::feed_ingest::poll_all_feeds(context).await;
             let total_new: usize = results.iter().map(|r| r.new_entries).sum();
             let feeds: Vec<_> = results
                 .iter()

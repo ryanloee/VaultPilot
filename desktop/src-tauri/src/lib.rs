@@ -211,6 +211,14 @@ pub fn run() {
             commands::collections::remove_note_from_collection,
             commands::collections::list_notes_in_collection,
             commands::collections::get_collections_for_note,
+            // feeds (RSS/Atom/JSON subscriptions)
+            commands::feeds::list_feeds,
+            commands::feeds::add_feed,
+            commands::feeds::update_feed,
+            commands::feeds::remove_feed,
+            commands::feeds::set_feed_enabled,
+            commands::feeds::refresh_feeds,
+            commands::feeds::refresh_feed,
             // chat
             commands::chat::load_chat_state,
             commands::chat::save_chat_state,
@@ -242,6 +250,18 @@ pub fn run() {
             commands::sync::get_peer_manifest,
             commands::sync::list_local_manifest,
             commands::sync::sync_selected,
+            // mail (IMAP-to-vault; desktop only — mobile drops the `email`
+            // feature because native-tls/OpenSSL can't cross-compile)
+            #[cfg(desktop)]
+            commands::mail::list_mail_accounts,
+            #[cfg(desktop)]
+            commands::mail::add_mail_account,
+            #[cfg(desktop)]
+            commands::mail::delete_mail_account,
+            #[cfg(desktop)]
+            commands::mail::sync_mail_account,
+            #[cfg(desktop)]
+            commands::mail::search_emails,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

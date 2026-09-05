@@ -64,6 +64,21 @@ describe("tauri command-name contract (#4082)", () => {
       ["listSnapshots", ["n1"]],
       ["getSnapshot", ["s1"]],
       ["restoreSnapshot", ["n1", "s1"]],
+      ["listFeeds", []],
+      ["addFeed", ["https://example.com/feed", "Example", "", "", "", 60]],
+      ["updateFeed", ["f1", "Example", "rss", "", "", 60, true]],
+      ["removeFeed", ["f1"]],
+      ["setFeedEnabled", ["f1", false]],
+      ["refreshFeeds", []],
+      ["refreshFeed", ["f1"]],
+      ["listMailAccounts", []],
+      [
+        "addMailAccount",
+        ["Work", "imap.example.com", 993, "you@example.com", "secret", true, 30],
+      ],
+      ["deleteMailAccount", ["m1"]],
+      ["syncMailAccount", ["m1"]],
+      ["searchEmails", ["hello", 50, 0]],
     ] as const;
     for (const [method, args] of calls) {
       const fn = (tauriApi as Record<string, (...a: unknown[]) => unknown>)[method];

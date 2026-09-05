@@ -7,10 +7,15 @@ import type {
   Collection,
   ConversationSummary,
   ConversationTurn,
+  FeedPollResult,
+  FeedSubscription,
+  MailAccount,
+  MailSyncResult,
   NoteDocument,
   NoteMeta,
   ProviderConnectionResult,
   RelatedNote,
+  StoredEmail,
   TriggerExecution,
   TriggerRule,
 } from "@/types";
@@ -288,6 +293,77 @@ export const tauriApi = {
       customPrompt,
       providerName,
     }),
+
+  // ── feeds (RSS/Atom/JSON subscriptions) ──
+  listFeeds: () => invoke<FeedSubscription[]>("list_feeds"),
+  addFeed: (
+    url: string,
+    title: string,
+    kind: string,
+    collection: string,
+    tags: string,
+    intervalMinutes: number
+  ) =>
+    invoke<FeedSubscription>("add_feed", {
+      url,
+      title,
+      kind,
+      collection,
+      tags,
+      intervalMinutes,
+    }),
+  updateFeed: (
+    id: string,
+    title: string,
+    kind: string,
+    collection: string,
+    tags: string,
+    intervalMinutes: number,
+    enabled: boolean
+  ) =>
+    invoke<boolean>("update_feed", {
+      id,
+      title,
+      kind,
+      collection,
+      tags,
+      intervalMinutes,
+      enabled,
+    }),
+  removeFeed: (id: string) => invoke<boolean>("remove_feed", { id }),
+  setFeedEnabled: (id: string, enabled: boolean) =>
+    invoke<boolean>("set_feed_enabled", { id, enabled }),
+  /** Fetch all enabled feeds now; each feed reports its own status. */
+  refreshFeeds: () => invoke<FeedPollResult[]>("refresh_feeds"),
+  /** Fetch a single feed now. */
+  refreshFeed: (id: string) => invoke<FeedPollResult>("refresh_feed", { id }),
+
+  // ── mail (IMAP-to-vault; desktop only) ──
+  listMailAccounts: () => invoke<MailAccount[]>("list_mail_accounts"),
+  addMailAccount: (
+    name: string,
+    host: string,
+    port: number,
+    username: string,
+    password: string,
+    useTls: boolean,
+    syncFrequencyMinutes: number
+  ) =>
+    invoke<MailAccount>("add_mail_account", {
+      name,
+      host,
+      port,
+      username,
+      password,
+      useTls,
+      syncFrequencyMinutes,
+    }),
+  deleteMailAccount: (id: string) =>
+    invoke<boolean>("delete_mail_account", { id }),
+  syncMailAccount: (id: string) =>
+    invoke<MailSyncResult>("sync_mail_account", { id }),
+  searchEmails: (query: string, limit?: number, offset?: number) =>
+    invoke<StoredEmail[]>("search_emails", { query, limit, offset }),
 };
 
 /**

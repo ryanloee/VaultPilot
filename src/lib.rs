@@ -20,6 +20,7 @@ pub mod custom_tools;
 pub mod deep_link;
 pub mod diff;
 pub mod export;
+pub mod feed_ingest;
 pub mod file_parsing;
 pub mod flashcards;
 pub mod fsrs;

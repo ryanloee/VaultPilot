@@ -3,6 +3,9 @@
 
 pub mod chat;
 pub mod collections;
+pub mod feeds;
+#[cfg(desktop)]
+pub mod mail;
 pub mod notes;
 pub mod settings;
 pub mod sync;

@@ -706,6 +706,97 @@ fn strip_html_tags(html: &str) -> String {
     out.trim().to_string()
 }
 
+// ─── Async (spawn-blocking) wrappers ────────────────────────────
+//
+// The Tauri desktop layer is async; SQLite access is blocking. These mirror
+// the storage-layer `*_async` convention so `#[tauri::command]`s can `await`
+// without blocking the runtime.
+
+/// Add a mail account (async wrapper).
+#[allow(clippy::too_many_arguments)]
+#[instrument(skip(context))]
+pub async fn add_mail_account_async(
+    context: &StorageContext,
+    name: String,
+    host: String,
+    port: u16,
+    username: String,
+    password: String,
+    use_tls: bool,
+    sync_frequency_minutes: u64,
+) -> Result<MailAccount> {
+    let ctx = context.clone();
+    tokio::task::spawn_blocking(move || {
+        add_mail_account(
+            &ctx,
+            &name,
+            &host,
+            port,
+            &username,
+            &password,
+            use_tls,
+            sync_frequency_minutes,
+        )
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// List mail accounts (async wrapper).
+#[instrument(skip(context))]
+pub async fn list_mail_accounts_async(context: &StorageContext) -> Result<Vec<MailAccount>> {
+    let ctx = context.clone();
+    tokio::task::spawn_blocking(move || list_mail_accounts(&ctx))
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Delete a mail account (async wrapper).
+#[instrument(skip(context))]
+pub async fn delete_mail_account_async(context: &StorageContext, id: String) -> Result<bool> {
+    let ctx = context.clone();
+    tokio::task::spawn_blocking(move || delete_mail_account(&ctx, &id))
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Sync a mail account: IMAP fetch + vault ingest (async wrapper).
+///
+/// Network I/O runs on the blocking pool so the async runtime stays free.
+#[instrument(skip(context))]
+pub async fn sync_mail_account_async(
+    context: &StorageContext,
+    account_id: String,
+) -> Result<SyncResult> {
+    let ctx = context.clone();
+    tokio::task::spawn_blocking(move || sync_mail_account(&ctx, &account_id))
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Search stored emails (async wrapper).
+#[instrument(skip(context))]
+pub async fn search_emails_async(
+    context: &StorageContext,
+    query: String,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<StoredEmail>> {
+    let ctx = context.clone();
+    tokio::task::spawn_blocking(move || search_emails(&ctx, &query, limit, offset))
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
+}
+
+/// Get a single stored email (async wrapper).
+#[instrument(skip(context))]
+pub async fn get_email_async(context: &StorageContext, id: String) -> Result<Option<StoredEmail>> {
+    let ctx = context.clone();
+    tokio::task::spawn_blocking(move || get_email(&ctx, &id))
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))?
+}
+
 // ─── Schema ───────────────────────────────────────────────────────
 
 /// DDL statements for mail-related tables. Called from `ensure_schema`.

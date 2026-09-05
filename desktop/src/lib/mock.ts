@@ -3,11 +3,16 @@ import type {
   BacklinkEntry,
   ChatState,
   Collection,
+  FeedPollResult,
+  FeedSubscription,
+  MailAccount,
+  MailSyncResult,
   NoteDocument,
   NoteMeta,
   ConversationSummary,
   ConversationTurn,
   ProviderConnectionResult,
+  StoredEmail,
   TriggerExecution,
   TriggerRule,
 } from "@/types";
@@ -154,6 +159,60 @@ let mockCollections: Collection[] = [
     updatedAt: now(),
     parentId: "col-2",
     noteCount: 0,
+  },
+];
+
+let mockFeeds: FeedSubscription[] = [
+  {
+    id: "mock-feed-1",
+    title: "示例博客",
+    url: "https://example.com/feed.xml",
+    kind: "rss",
+    collection: "",
+    tags: "tech",
+    intervalMinutes: 60,
+    enabled: true,
+    lastFetchedAt: now(),
+    etag: "",
+    lastModified: "",
+    lastEntryId: "",
+    lastEntryDate: "",
+    lastStatus: "success",
+    lastError: "",
+    createdAt: now(),
+    updatedAt: now(),
+  },
+];
+
+let mockMailAccounts: MailAccount[] = [
+  {
+    id: "mock-mail-1",
+    name: "示例邮箱",
+    host: "imap.example.com",
+    port: 993,
+    username: "you@example.com",
+    useTls: true,
+    syncEnabled: true,
+    syncFrequencyMinutes: 30,
+    lastSyncAt: now(),
+    createdAt: now(),
+    updatedAt: now(),
+  },
+];
+
+let mockEmails: StoredEmail[] = [
+  {
+    id: "mock-email-1",
+    accountId: "mock-mail-1",
+    messageId: "<mock1@example.com>",
+    subject: "欢迎使用邮件导入（Mock）",
+    fromAddr: "sender@example.com",
+    toAddrs: "you@example.com",
+    ccAddrs: "",
+    date: now(),
+    bodyText: "这是一封模拟邮件，用于浏览器测试模式下的邮件搜索 UI 演练。",
+    noteId: "",
+    importedAt: now(),
   },
 ];
 
@@ -509,6 +568,144 @@ export const mockApi = {
     customPrompt,
     providerName,
   }),
+
+  // ── feeds (in-memory list) ──
+  listFeeds: async (): Promise<FeedSubscription[]> => [...mockFeeds],
+  addFeed: async (
+    url: string,
+    title: string,
+    kind: string,
+    collection: string,
+    tags: string,
+    intervalMinutes: number
+  ): Promise<FeedSubscription> => {
+    const feed: FeedSubscription = {
+      id: `mock-feed-${Date.now()}`,
+      title: title || url,
+      url,
+      kind: kind || "rss",
+      collection,
+      tags,
+      intervalMinutes,
+      enabled: true,
+      lastFetchedAt: "",
+      etag: "",
+      lastModified: "",
+      lastEntryId: "",
+      lastEntryDate: "",
+      lastStatus: "",
+      lastError: "",
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    mockFeeds.unshift(feed);
+    return feed;
+  },
+  updateFeed: async (
+    id: string,
+    title: string,
+    kind: string,
+    collection: string,
+    tags: string,
+    intervalMinutes: number,
+    enabled: boolean
+  ): Promise<boolean> => {
+    const f = mockFeeds.find((x) => x.id === id);
+    if (!f) return false;
+    f.title = title;
+    f.kind = kind;
+    f.collection = collection;
+    f.tags = tags;
+    f.intervalMinutes = intervalMinutes;
+    f.enabled = enabled;
+    f.updatedAt = now();
+    return true;
+  },
+  removeFeed: async (id: string): Promise<boolean> => {
+    const before = mockFeeds.length;
+    mockFeeds = mockFeeds.filter((x) => x.id !== id);
+    return mockFeeds.length < before;
+  },
+  setFeedEnabled: async (id: string, enabled: boolean): Promise<boolean> => {
+    const f = mockFeeds.find((x) => x.id === id);
+    if (!f) return false;
+    f.enabled = enabled;
+    return true;
+  },
+  refreshFeeds: async (): Promise<FeedPollResult[]> => {
+    await new Promise((r) => setTimeout(r, 500));
+    return mockFeeds
+      .filter((f) => f.enabled)
+      .map((f) => {
+        f.lastFetchedAt = now();
+        f.lastStatus = "success";
+        return { feedId: f.id, status: "success", newEntries: 0, error: "" };
+      });
+  },
+  refreshFeed: async (id: string): Promise<FeedPollResult> => {
+    await new Promise((r) => setTimeout(r, 500));
+    const f = mockFeeds.find((x) => x.id === id);
+    if (f) {
+      f.lastFetchedAt = now();
+      f.lastStatus = "success";
+    }
+    return { feedId: id, status: "success", newEntries: 0, error: "" };
+  },
+
+  // ── mail (in-memory list; mock mode pretends desktop) ──
+  listMailAccounts: async (): Promise<MailAccount[]> => [...mockMailAccounts],
+  addMailAccount: async (
+    name: string,
+    host: string,
+    port: number,
+    username: string,
+    _password: string,
+    useTls: boolean,
+    syncFrequencyMinutes: number
+  ): Promise<MailAccount> => {
+    const ts = now();
+    const acc: MailAccount = {
+      id: `mock-mail-${Date.now()}`,
+      name,
+      host,
+      port,
+      username,
+      useTls,
+      syncEnabled: true,
+      syncFrequencyMinutes,
+      lastSyncAt: "",
+      createdAt: ts,
+      updatedAt: ts,
+    };
+    mockMailAccounts.unshift(acc);
+    return acc;
+  },
+  deleteMailAccount: async (id: string): Promise<boolean> => {
+    const before = mockMailAccounts.length;
+    mockMailAccounts = mockMailAccounts.filter((x) => x.id !== id);
+    return mockMailAccounts.length < before;
+  },
+  syncMailAccount: async (id: string): Promise<MailSyncResult> => {
+    await new Promise((r) => setTimeout(r, 800));
+    const acc = mockMailAccounts.find((x) => x.id === id);
+    if (acc) acc.lastSyncAt = now();
+    return {
+      accountId: id,
+      fetched: 3,
+      imported: 2,
+      skippedDuplicates: 1,
+      errors: [],
+    };
+  },
+  searchEmails: async (query: string): Promise<StoredEmail[]> => {
+    const q = query.toLowerCase();
+    return mockEmails.filter(
+      (e) =>
+        e.subject.toLowerCase().includes(q) ||
+        e.fromAddr.toLowerCase().includes(q) ||
+        e.bodyText.toLowerCase().includes(q)
+    );
+  },
 } as const;
 
 export function isTauri(): boolean {

@@ -4,6 +4,7 @@ import { MobileTabBar } from "./MobileTabBar";
 import { Sidebar } from "./Sidebar";
 import { StatusBar } from "./StatusBar";
 import { ChatView } from "@/components/chat/ChatView";
+import { IntegrationsView } from "@/components/integrations/IntegrationsView";
 import { NotesView } from "@/components/notes/NotesView";
 import { TriggerView } from "@/components/triggers/TriggerView";
 import { SettingsView } from "@/components/settings/SettingsView";
@@ -45,6 +46,7 @@ export function AppShell() {
           {view === "chat" && <ChatView />}
           {view === "notes" && <NotesView />}
           {desktop && view === "triggers" && <TriggerView />}
+          {view === "integrations" && <IntegrationsView />}
           {view === "settings" && <SettingsView />}
         </main>
       </div>

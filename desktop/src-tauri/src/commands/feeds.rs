@@ -126,5 +126,5 @@ pub async fn refresh_feed(
     initialize_storage_async(&ctx)
         .await
         .map_err(|e| e.to_string())?;
-    poll_single_feed_by_id(&ctx, &id).await.map_err(|e| e)
+    poll_single_feed_by_id(&ctx, &id).await
 }

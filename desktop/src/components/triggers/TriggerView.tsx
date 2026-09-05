@@ -186,6 +186,16 @@ function ScrollPicker({
   items: { value: number; label: string }[];
   className?: string;
 }) {
+  // While focused the input shows the raw draft; on blur/Enter it commits,
+  // clamped to the picker's range. 1-minute granularity means ▲/▼ stepping
+  // alone would need dozens of clicks to reach e.g. :07.
+  const min = items[0]?.value ?? 0;
+  const max = items[items.length - 1]?.value ?? 0;
+  const [draft, setDraft] = useState<string | null>(null);
+  const commit = (raw: string) => {
+    const n = parseInt(raw, 10);
+    if (Number.isFinite(n)) onChange(Math.min(max, Math.max(min, n)));
+  };
   return (
     <div className={cn("flex flex-col gap-0.5", className)}>
       <button
@@ -197,9 +207,23 @@ function ScrollPicker({
       >
         ▲
       </button>
-      <div className="rounded-md border border-border bg-background px-3 py-1.5 text-center text-sm font-mono min-w-[3rem]">
-        {String(value).padStart(2, "0")}
-      </div>
+      <input
+        inputMode="numeric"
+        value={draft ?? String(value).padStart(2, "0")}
+        onFocus={(e) => {
+          setDraft(String(value));
+          e.currentTarget.select();
+        }}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          if (draft !== null) commit(draft);
+          setDraft(null);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+        }}
+        className="rounded-md border border-border bg-background px-1 py-1.5 text-center text-sm font-mono min-w-[3rem] outline-none focus:border-primary"
+      />
       <button
         onClick={() => {
           const idx = items.findIndex((i) => i.value === value);
@@ -271,7 +295,9 @@ export function TriggerView() {
   const cronLabel = useMemo(() => cronToLabel(cronExpr), [cronExpr]);
 
   const hours = Array.from({ length: 24 }, (_, i) => ({ value: i, label: String(i).padStart(2, "0") }));
-  const minutes = Array.from({ length: 12 }, (_, i) => ({ value: i * 5, label: String(i * 5).padStart(2, "0") }));
+  // Full 1-minute granularity (#4088) — cron's smallest unit; the old
+  // 5-minute steps (0/5/…/55) blocked "06:07"-style schedules.
+  const minutes = Array.from({ length: 60 }, (_, i) => ({ value: i, label: String(i).padStart(2, "0") }));
 
   const toggleCustomDay = (day: number) => {
     setCustomDays((prev) =>

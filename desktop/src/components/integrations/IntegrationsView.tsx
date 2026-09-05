@@ -22,11 +22,20 @@ function fmtTime(iso: string | undefined): string {
 
 type TabId = "feeds" | "mail" | "mcp";
 
-const TABS: { id: TabId; label: string }[] = [
+const ALL_TABS: { id: TabId; label: string }[] = [
   { id: "feeds", label: "订阅源" },
   { id: "mail", label: "邮件" },
   { id: "mcp", label: "MCP" },
 ];
+
+/**
+ * Tabs visible on this platform. The MCP tab is a client-configuration guide
+ * (Claude Desktop / Codex on a PC) — meaningless on mobile, so it is
+ * desktop-only. Exported for tests.
+ */
+export function visibleTabs(isDesktop: boolean): { id: TabId; label: string }[] {
+  return ALL_TABS.filter((t) => isDesktop || t.id !== "mcp");
+}
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -720,7 +729,7 @@ export function IntegrationsView() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-1 border-b border-border px-4 pt-3">
-        {TABS.map(({ id, label }) => (
+        {visibleTabs(desktop).map(({ id, label }) => (
           <button
             key={id}
             onClick={() => setTab(id)}

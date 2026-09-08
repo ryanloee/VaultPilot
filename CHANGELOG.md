@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.48] - 2026-09-08
+
+### Added
+- **每个 Provider 自定义 User-Agent**：`ProviderConfig` 新增 `user_agent` 字段（留空默认 `VaultPilot/{version}`），所有 AI 请求（含流式、连接探测）携带；客户端缓存按 UA 区分，改配置即时生效。经代理或对 UA 敏感的提供商可借此标识自定义客户端。
+- **X-Conversation-Id 请求头管道**：`send_request_with_temperature` / `send_request_streaming` 支持可选 `session_id`，非空时以 `X-Conversation-Id` 头随请求发送；现有调用方暂传 `None`（管道就绪）。
+- **MCP 令牌持久化**：集成页生成的令牌现在写入 vault 根目录的 `mcp-config.json`（`vaultpilot-mcp` 启动时读取期望令牌的同一文件）。切页/重启后进 MCP 页仍显示当前令牌；生成新令牌会提示同步客户端配置。新增 `mcp_config` lib 模块（含防回归测试：保存时保留手写字段、兼容 snake_case 文件格式）。
+
+### Fixed
+- **移动端集成页隐藏 MCP tab**：MCP 是 PC 端客户端接入指引，手机上无意义。
+- **MCP 配置片段不再要求 `--vault-dir`**：不传该参数时连接器自动跟随桌面应用的 vault（`for_sidecar` 回退）；片段与 README 同步简化。
+
 ## [0.7.47] - 2026-09-05
 
 ### Added

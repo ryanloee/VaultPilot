@@ -29,6 +29,11 @@ Edit `claude_desktop_config.json` (or the equivalent `mcp.json` in Claude Deskto
 }
 ```
 
+> `--vault-dir` is optional. Omit it and the connector falls back to the same
+> storage the desktop app uses (`StorageContext::for_sidecar`), following the
+> vault configured there. Pass it only to point the connector at a different
+> vault than the desktop app's.
+
 </details>
 
 <details>

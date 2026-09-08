@@ -587,7 +587,7 @@ function mcpConfigSnippet(token: string): string {
   "mcpServers": {
     "vaultpilot": {
       "command": "<vaultpilot-mcp 路径>",
-      "args": ["--vault-dir", "<你的 vault 目录>", "--token", "${token}"],
+      "args": ["--token", "${token}"],
       "env": { "VAULTPILOT_MCP_TOKEN": "${token}" }
     }
   }
@@ -680,6 +680,13 @@ function McpTab({ onOpenUrl }: { onOpenUrl: (url: string) => void }) {
         </pre>
         <ul className="list-disc pl-5 text-xs text-muted-foreground">
           <li>构建：cargo build --release -p vaultpilot-mcp</li>
+          <li>
+            不用配 vault 路径：不传 --vault-dir 时自动跟随桌面应用当前的知识库
+          </li>
+          <li>
+            只有想让 MCP 指向其他目录时才在 args 里补
+            ["--vault-dir", "目录"]
+          </li>
           <li>Claude Desktop：编辑 claude_desktop_config.json，加入上面片段</li>
           <li>Codex / Cursor：加入 .cursor/mcp.json 或等效配置</li>
           <li>

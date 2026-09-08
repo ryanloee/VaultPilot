@@ -601,7 +601,7 @@ function generateToken(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function McpTab({ onOpenUrl }: { onOpenUrl: (url: string) => void }) {
+function McpTab() {
   const [token, setToken] = useState<string | null>(null);
   const [copied, setCopied] = useState<"config" | "token" | null>(null);
 
@@ -622,50 +622,20 @@ function McpTab({ onOpenUrl }: { onOpenUrl: (url: string) => void }) {
 
   return (
     <div className="flex flex-col gap-3 p-4 text-sm">
-      <p className="text-muted-foreground">
-        MCP（Model Context Protocol）让 Claude Desktop、Cursor、Codex 等外部 AI
-        客户端直接读写你的 VaultPilot 笔记库。MCP 服务是独立进程（stdio），桌面
-        应用内无需常驻开关——按下面配置接入即可。
-      </p>
-
-      <div className="flex flex-col gap-2 rounded-md border border-border bg-card p-3">
-        <span className="font-medium">访问令牌（推荐）</span>
-        <p className="text-xs text-muted-foreground">
-          配置后只有持有令牌的客户端才能访问 vault：令牌通过
-          <code className="mx-1 rounded bg-secondary px-1">--token</code>
-          参数（服务端期望值）和客户端
-          <code className="mx-1 rounded bg-secondary px-1">env</code>
-          注入（持有证明）成对出现，不匹配的进程会被直接拒绝。不配置则任何本地进程都可访问（启动时会打警告）。
-        </p>
-        <div className="flex items-center gap-2">
-          <Button size="sm" onClick={() => setToken(generateToken())}>
-            生成新令牌
-          </Button>
-          {token && (
-            <>
-              <code className="min-w-0 flex-1 truncate rounded bg-secondary px-2 py-1 font-mono text-xs">
-                {token}
-              </code>
-              <Button size="sm" variant="secondary" onClick={() => copy("token")}>
-                {copied === "token" ? "已复制" : "复制令牌"}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setToken(null)}
-                title="清除（仅清除界面显示，不涉及任何存储）"
-              >
-                清除
-              </Button>
-            </>
-          )}
-        </div>
-        <p className="text-xs text-muted-foreground">
-          令牌只在本页面内存中生成、不落盘；请把它填进客户端配置后自行妥善保管。
-          同一个值也可以写进 vault 的 mcp-config.json（
-          <code className="rounded bg-secondary px-1">{"{\"token\": \"…\"}"}</code>
-          ）替代 --token 参数。
-        </p>
+      <div className="flex items-center gap-2">
+        <Button size="sm" onClick={() => setToken(generateToken())}>
+          生成令牌
+        </Button>
+        {token && (
+          <>
+            <code className="min-w-0 flex-1 truncate rounded bg-secondary px-2 py-1 font-mono text-xs">
+              {token}
+            </code>
+            <Button size="sm" variant="secondary" onClick={() => copy("token")}>
+              {copied === "token" ? "已复制" : "复制令牌"}
+            </Button>
+          </>
+        )}
       </div>
 
       <div className="flex flex-col gap-2 rounded-md border border-border bg-card p-3">
@@ -678,43 +648,6 @@ function McpTab({ onOpenUrl }: { onOpenUrl: (url: string) => void }) {
         <pre className="overflow-x-auto rounded bg-secondary p-2 font-mono text-xs">
           {snippet}
         </pre>
-        <ul className="list-disc pl-5 text-xs text-muted-foreground">
-          <li>构建：cargo build --release -p vaultpilot-mcp</li>
-          <li>
-            不用配 vault 路径：不传 --vault-dir 时自动跟随桌面应用当前的知识库
-          </li>
-          <li>
-            只有想让 MCP 指向其他目录时才在 args 里补
-            ["--vault-dir", "目录"]
-          </li>
-          <li>Claude Desktop：编辑 claude_desktop_config.json，加入上面片段</li>
-          <li>Codex / Cursor：加入 .cursor/mcp.json 或等效配置</li>
-          <li>
-            令牌不匹配的客户端会在启动时被拒绝（stderr 报 unauthorized）
-          </li>
-        </ul>
-      </div>
-      <div className="flex flex-col gap-2 rounded-md border border-border bg-card p-3">
-        <span className="font-medium">可用工具</span>
-        <ul className="grid grid-cols-2 gap-1 font-mono text-xs text-muted-foreground">
-          <li>vault_search</li>
-          <li>vault_read</li>
-          <li>vault_write</li>
-          <li>vault_list</li>
-          <li>vault_related</li>
-          <li>github_list_issues</li>
-        </ul>
-      </div>
-      <div>
-        <Button
-          size="sm"
-          variant="secondary"
-          onClick={() =>
-            onOpenUrl("https://modelcontextprotocol.io/docs/getting-started/intro")
-          }
-        >
-          打开 MCP 官方文档
-        </Button>
       </div>
     </div>
   );
@@ -753,13 +686,7 @@ export function IntegrationsView() {
       <div className="min-h-0 flex-1 overflow-y-auto">
         {tab === "feeds" && <FeedsTab />}
         {tab === "mail" && <MailTab desktop={desktop} />}
-        {tab === "mcp" && (
-          <McpTab
-            onOpenUrl={(url) => {
-              api.openExternalUrl(url).catch(() => {});
-            }}
-          />
-        )}
+        {tab === "mcp" && <McpTab />}
       </div>
     </div>
   );

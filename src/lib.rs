@@ -30,6 +30,7 @@ pub mod knowledge_graph;
 #[cfg(feature = "email")]
 pub mod mail;
 pub mod markdown_table;
+pub mod mcp_config;
 pub mod mermaid;
 pub mod mindmap;
 pub mod mirror;

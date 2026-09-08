@@ -216,6 +216,8 @@ let mockEmails: StoredEmail[] = [
   },
 ];
 
+let mockMcpToken: string | null = null;
+
 // ── mock API surface (mirrors the real api object) ────────────────────────
 
 export const mockApi = {
@@ -705,6 +707,13 @@ export const mockApi = {
         e.fromAddr.toLowerCase().includes(q) ||
         e.bodyText.toLowerCase().includes(q)
     );
+  },
+
+  // ── mcp connector config (in-memory stand-in for mcp-config.json) ──
+  getMcpConfig: async (): Promise<{ vaultDir?: string; token?: string } | null> =>
+    mockMcpToken ? { token: mockMcpToken } : null,
+  saveMcpToken: async (token: string): Promise<void> => {
+    mockMcpToken = token;
   },
 } as const;
 

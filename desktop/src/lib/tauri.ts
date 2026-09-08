@@ -364,6 +364,13 @@ export const tauriApi = {
     invoke<MailSyncResult>("sync_mail_account", { id }),
   searchEmails: (query: string, limit?: number, offset?: number) =>
     invoke<StoredEmail[]>("search_emails", { query, limit, offset }),
+
+  // ── mcp connector config ──
+  /** Read the vault-root mcp-config.json (source of truth for the token). */
+  getMcpConfig: () =>
+    invoke<{ vaultDir?: string; token?: string } | null>("get_mcp_config"),
+  /** Persist a newly generated token into mcp-config.json. */
+  saveMcpToken: (token: string) => invoke<void>("save_mcp_token", { token }),
 };
 
 /**

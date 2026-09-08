@@ -6,6 +6,7 @@ pub mod collections;
 pub mod feeds;
 #[cfg(desktop)]
 pub mod mail;
+pub mod mcp;
 pub mod notes;
 pub mod settings;
 pub mod sync;

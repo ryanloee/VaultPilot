@@ -602,8 +602,32 @@ function generateToken(): string {
 }
 
 function McpTab() {
+  // The token's source of truth is the vault-root mcp-config.json (which the
+  // vaultpilot-mcp connector reads at startup). Load it on mount so the
+  // token survives page switches; "生成令牌" persists the new value there.
   const [token, setToken] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [copied, setCopied] = useState<"config" | "token" | null>(null);
+
+  useEffect(() => {
+    api
+      .getMcpConfig()
+      .then((cfg) => {
+        if (cfg?.token) setToken(cfg.token);
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleGenerate = async () => {
+    const t = generateToken();
+    setToken(t);
+    try {
+      await api.saveMcpToken(t);
+      setNotice("已写入 vault 的 mcp-config.json — Claude Desktop 里的配置需同步为新令牌");
+    } catch {
+      setNotice("写入 mcp-config.json 失败，令牌仅在页面显示");
+    }
+  };
 
   const snippet = mcpConfigSnippet(token ?? "<你的 token>");
 
@@ -623,7 +647,7 @@ function McpTab() {
   return (
     <div className="flex flex-col gap-3 p-4 text-sm">
       <div className="flex items-center gap-2">
-        <Button size="sm" onClick={() => setToken(generateToken())}>
+        <Button size="sm" onClick={() => void handleGenerate()}>
           生成令牌
         </Button>
         {token && (
@@ -637,6 +661,7 @@ function McpTab() {
           </>
         )}
       </div>
+      {notice && <p className="text-xs text-muted-foreground">{notice}</p>}
 
       <div className="flex flex-col gap-2 rounded-md border border-border bg-card p-3">
         <div className="flex items-center justify-between">

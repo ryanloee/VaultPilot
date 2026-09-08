@@ -262,6 +262,9 @@ pub fn run() {
             commands::mail::sync_mail_account,
             #[cfg(desktop)]
             commands::mail::search_emails,
+            // mcp connector config (token persistence)
+            commands::mcp::get_mcp_config,
+            commands::mcp::save_mcp_token,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

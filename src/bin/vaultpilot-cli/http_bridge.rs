@@ -2841,6 +2841,7 @@ async fn http_chat_completions(
                             &user_prompt_owned,
                             &image_paths,
                             0.2,
+                            None,
                             |chunk| {
                                 let chunk_data = serde_json::json!({
                                     "id": format!("chatcmpl-{}", Uuid::new_v4().simple()),

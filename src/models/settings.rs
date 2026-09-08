@@ -691,6 +691,7 @@ mod tests {
                 context_window_tokens: Some(128_000),
                 max_output_tokens: Some(16384),
                 provider_type: None,
+                user_agent: None,
             },
             providers: Vec::new(),
             active_provider_index: 0,

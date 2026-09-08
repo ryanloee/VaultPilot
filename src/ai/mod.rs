@@ -50,7 +50,7 @@ pub async fn organize_note(
     let system = prompting::ingest_system_prompt();
     let prompt = prompting::ingest_user_prompt(raw_input);
     let response =
-        send_request_with_temperature(settings, &system, &prompt, image_paths, 0.1).await?;
+        send_request_with_temperature(settings, &system, &prompt, image_paths, 0.1, None).await?;
     Ok(parse_or_fallback_note(&response.text, raw_input))
 }
 
@@ -152,7 +152,8 @@ pub async fn suggest_batch_collections(
          existing list. Output ONLY valid JSON — no markdown fences, no extra text."
     );
 
-    let response = send_request_with_temperature(settings, system, &user_prompt, &[], 0.1).await?;
+    let response =
+        send_request_with_temperature(settings, system, &user_prompt, &[], 0.1, None).await?;
     let json_text = extract_json(&response.text).with_context(|| {
         format!(
             "model did not return valid JSON for batch collection suggestions. Response: {}",
@@ -239,7 +240,7 @@ pub async fn select_tool_call(
         prior_tool_results,
     );
     let response =
-        send_request_with_temperature(settings, &system, &prompt, image_paths, 0.1).await?;
+        send_request_with_temperature(settings, &system, &prompt, image_paths, 0.1, None).await?;
 
     // #3384: Build the list of custom tool names so the parser can recognize
     // them and route them to AssistantToolCall::Custom.
@@ -260,9 +261,15 @@ pub async fn select_tool_call(
                 prior_tool_results,
                 &response.text,
             );
-            let retry_response =
-                send_request_with_temperature(settings, &system, &retry_prompt, image_paths, 0.1)
-                    .await?;
+            let retry_response = send_request_with_temperature(
+                settings,
+                &system,
+                &retry_prompt,
+                image_paths,
+                0.1,
+                None,
+            )
+            .await?;
             let tool_call = parse_tool_call(&retry_response.text, question, &custom_tool_names)
                 .with_context(|| {
                     format!(
@@ -424,7 +431,8 @@ pub async fn generate_plan(
 ) -> Result<PlanGenerationResult> {
     let system = prompting::plan_generation_system_prompt();
     let prompt = prompting::plan_generation_user_prompt(task, tool_results);
-    let response = send_request_with_temperature(settings, &system, &prompt, &[], 0.2).await?;
+    let response =
+        send_request_with_temperature(settings, &system, &prompt, &[], 0.2, None).await?;
     Ok(PlanGenerationResult {
         text: response.text,
         usage: response.usage,
@@ -512,7 +520,8 @@ pub async fn select_relevant_note_ids(
 
     let system = prompting::note_selection_system_prompt();
     let prompt = prompting::note_selection_user_prompt(question, candidates, history);
-    let response = send_request_with_temperature(settings, &system, &prompt, &[], 0.1).await?;
+    let response =
+        send_request_with_temperature(settings, &system, &prompt, &[], 0.1, None).await?;
 
     if let Ok(json) = extract_json(&response.text) {
         if let Ok(parsed) = serde_json::from_str::<NoteSelectionResponse>(&json) {

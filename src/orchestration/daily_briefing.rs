@@ -129,9 +129,15 @@ pub async fn generate_daily_briefing(
     );
 
     // 4. Call the AI with a low temperature for deterministic output
-    let response =
-        send_request_with_temperature(settings, BRIEFING_SYSTEM_PROMPT, &user_prompt, &[], 0.3)
-            .await?;
+    let response = send_request_with_temperature(
+        settings,
+        BRIEFING_SYSTEM_PROMPT,
+        &user_prompt,
+        &[],
+        0.3,
+        None,
+    )
+    .await?;
 
     // 5. Save the briefing as a vault note
     //    Use Local::now() for the date string so the title reflects the user's

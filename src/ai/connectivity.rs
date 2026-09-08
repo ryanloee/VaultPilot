@@ -105,7 +105,20 @@ pub async fn check_provider_connection(
     }
 
     let timeout = Duration::from_millis(params.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS));
-    let client = match reqwest::Client::builder().timeout(timeout).build() {
+    let mut probe_headers = reqwest::header::HeaderMap::new();
+    probe_headers.insert(
+        "user-agent",
+        reqwest::header::HeaderValue::from_str(&format!(
+            "VaultPilot/{}",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .unwrap_or_else(|_| reqwest::header::HeaderValue::from_static("VaultPilot")),
+    );
+    let client = match reqwest::Client::builder()
+        .timeout(timeout)
+        .default_headers(probe_headers)
+        .build()
+    {
         Ok(c) => c,
         Err(e) => {
             return ProviderConnectionResult {

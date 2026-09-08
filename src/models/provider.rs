@@ -101,6 +101,11 @@ pub struct ProviderConfig {
     /// are tolerated and mapped to `None` so settings still load (#3140).
     #[serde(default, deserialize_with = "deserialize_optional_provider_type")]
     pub provider_type: Option<ProviderType>,
+    /// Custom User-Agent string sent with API requests. When `None`, defaults to
+    /// `VaultPilot/{version}`. Set this to identify a custom client (e.g.
+    /// `OpenCode/1.0`) when using a proxy or provider that inspects the UA.
+    #[serde(default)]
+    pub user_agent: Option<String>,
 }
 
 impl ProviderConfig {
@@ -115,6 +120,7 @@ impl ProviderConfig {
             context_window_tokens: self.context_window_tokens,
             max_output_tokens: self.max_output_tokens,
             provider_type: self.provider_type,
+            user_agent: self.user_agent.clone(),
         }
     }
 
@@ -123,6 +129,14 @@ impl ProviderConfig {
     pub fn effective_provider_type(&self) -> ProviderType {
         self.provider_type
             .unwrap_or_else(|| ProviderType::from_base_url(&self.base_url))
+    }
+
+    /// Return the effective User-Agent: custom value if set, otherwise
+    /// `VaultPilot/{version}`.
+    pub fn effective_user_agent(&self) -> String {
+        self.user_agent
+            .clone()
+            .unwrap_or_else(|| format!("VaultPilot/{}", env!("CARGO_PKG_VERSION")))
     }
 
     /// Validate provider configuration, returning a list of error messages.
@@ -167,6 +181,7 @@ impl Default for ProviderConfig {
             context_window_tokens: None,
             max_output_tokens: None,
             provider_type: None,
+            user_agent: None,
         }
     }
 }
@@ -181,6 +196,7 @@ impl std::fmt::Debug for ProviderConfig {
             .field("context_window_tokens", &self.context_window_tokens)
             .field("max_output_tokens", &self.max_output_tokens)
             .field("provider_type", &self.provider_type)
+            .field("user_agent", &self.user_agent)
             .finish()
     }
 }
@@ -835,6 +851,7 @@ mod tests {
             context_window_tokens: None,
             max_output_tokens: None,
             provider_type: None,
+            user_agent: None,
         };
         let masked = provider.masked();
         assert!(!masked.api_key.contains("very-long-secret"));
@@ -866,6 +883,7 @@ mod tests {
             context_window_tokens: Some(200_000),
             max_output_tokens: Some(8192),
             provider_type: Some(ProviderType::Anthropic),
+            user_agent: None,
         };
         let masked = provider.masked();
         assert_eq!(masked.name, "my-provider");

@@ -801,7 +801,7 @@ async fn inner_execute_llm_action(
         }
     }
 
-    match send_request_with_temperature(&action_settings, &system, &prompt, &[], 0.3).await {
+    match send_request_with_temperature(&action_settings, &system, &prompt, &[], 0.3, None).await {
         Ok(response) => process_action_result(request.action, &response.text, response.usage),
         Err(e) => {
             let error_msg = format!("AI 操作执行失败：{}", crate::sanitize_error(&e.to_string()));

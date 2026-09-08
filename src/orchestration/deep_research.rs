@@ -535,7 +535,7 @@ Focus on producing sub-questions that are:
         vault_block = vault_block
     );
 
-    let response = send_request_with_temperature(settings, system, &user_prompt, &[], 0.2)
+    let response = send_request_with_temperature(settings, system, &user_prompt, &[], 0.2, None)
         .await
         .context("AI planning call failed")?;
 
@@ -781,7 +781,7 @@ Focus on factual information, specific data points, and named sources."#,
         raw_results = raw_results
     );
 
-    let response = send_request_with_temperature(settings, system, &user_prompt, &[], 0.3)
+    let response = send_request_with_temperature(settings, system, &user_prompt, &[], 0.3, None)
         .await
         .context("AI search round summarization failed")?;
 
@@ -926,7 +926,7 @@ IMPORTANT: Return the complete report as a Markdown string. Do NOT wrap it in JS
         citations = citation_block,
     );
 
-    let response = send_request_with_temperature(settings, &system, &user_prompt, &[], 0.3)
+    let response = send_request_with_temperature(settings, &system, &user_prompt, &[], 0.3, None)
         .await
         .context("AI report synthesis failed")?;
 

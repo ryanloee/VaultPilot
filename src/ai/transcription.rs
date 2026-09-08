@@ -308,7 +308,7 @@ Output ONLY valid JSON — no markdown fences, no extra text."#,
         transcript = transcript
     );
 
-    let response = send_request_with_temperature(settings, system, &user_prompt, &[], 0.1)
+    let response = send_request_with_temperature(settings, system, &user_prompt, &[], 0.1, None)
         .await
         .context("LLM call for meeting summary generation failed")?;
 
@@ -420,7 +420,7 @@ Output ONLY valid JSON — no markdown fences, no extra text."#,
         transcript = transcript
     );
 
-    let response = send_request_with_temperature(settings, system, &user_prompt, &[], 0.1)
+    let response = send_request_with_temperature(settings, system, &user_prompt, &[], 0.1, None)
         .await
         .context("LLM call for speaker diarization failed")?;
 

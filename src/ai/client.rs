@@ -32,6 +32,7 @@ pub(super) struct CachedClient {
     base_url: String,
     resolved_addrs: Vec<(String, SocketAddr)>,
     proxy_url: Option<String>,
+    user_agent: String,
 }
 
 static CACHED_CLIENT: Mutex<Option<CachedClient>> = Mutex::new(None);
@@ -43,6 +44,7 @@ pub(super) fn get_or_build_client(
     base_url: &str,
     resolved_addrs: &[(String, SocketAddr)],
     proxy_url: Option<&str>,
+    user_agent: &str,
 ) -> Result<reqwest::Client> {
     let mut cache = CACHED_CLIENT.lock().unwrap_or_else(|e| {
         tracing::warn!("CACHED_CLIENT lock poisoned, recovering inner value");
@@ -55,6 +57,7 @@ pub(super) fn get_or_build_client(
             && cached.base_url == base_url
             && cached.resolved_addrs == resolved_addrs
             && cached.proxy_url.as_deref() == proxy_url
+            && cached.user_agent == user_agent
         {
             return Ok(cached.client.clone());
         }
@@ -62,6 +65,13 @@ pub(super) fn get_or_build_client(
 
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    // Identify VaultPilot to AI providers (mirrors OpenCode's User-Agent pattern).
+    // When the user sets a custom `user_agent` on the provider, it is used instead.
+    headers.insert(
+        "user-agent",
+        HeaderValue::from_str(user_agent)
+            .unwrap_or_else(|_| HeaderValue::from_static("VaultPilot")),
+    );
 
     use crate::models::ProviderType;
     match provider_type {
@@ -140,6 +150,7 @@ pub(super) fn get_or_build_client(
         base_url: base_url.to_string(),
         resolved_addrs: resolved_addrs.to_vec(),
         proxy_url: proxy_url.map(|s| s.to_string()),
+        user_agent: user_agent.to_string(),
     });
     Ok(client)
 }
@@ -247,7 +258,7 @@ pub(super) async fn send_request(
     prompt: &str,
     image_paths: &[String],
 ) -> Result<ModelResponse> {
-    send_request_with_temperature(settings, system, prompt, image_paths, 0.2).await
+    send_request_with_temperature(settings, system, prompt, image_paths, 0.2, None).await
 }
 
 #[instrument(skip(settings, system, prompt, image_paths), fields(model = %settings.effective_provider().model, temperature, routed))]
@@ -257,6 +268,7 @@ pub(crate) async fn send_request_with_temperature(
     prompt: &str,
     image_paths: &[String],
     temperature: f32,
+    session_id: Option<&str>,
 ) -> Result<ModelResponse> {
     let base_provider = settings.effective_provider();
 
@@ -313,6 +325,7 @@ pub(crate) async fn send_request_with_temperature(
         &provider.base_url,
         &resolved_addrs,
         settings.proxy_url.as_deref(),
+        &provider.effective_user_agent(),
     )?;
 
     let endpoint = normalize_endpoint(&provider.base_url, provider_type);
@@ -362,13 +375,14 @@ pub(crate) async fn send_request_with_temperature(
     };
 
     for attempt in 0..3 {
-        let response = match client
+        let mut req = client
             .post(&endpoint)
             .header("content-type", "application/json")
-            .body(body.clone())
-            .send()
-            .await
-        {
+            .body(body.clone());
+        if let Some(sid) = session_id {
+            req = req.header("X-Conversation-Id", sid);
+        }
+        let response = match req.send().await {
             Ok(response) => response,
             Err(error) => {
                 if should_retry_transport_error(&error) && attempt < 2 {
@@ -530,6 +544,7 @@ pub async fn send_request_streaming<'a>(
     prompt: &str,
     image_paths: &[String],
     temperature: f32,
+    session_id: Option<&str>,
     mut on_chunk: impl FnMut(&str) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
 ) -> Result<(String, RequestUsage)> {
     // ── #1842: intelligent model routing ──
@@ -579,6 +594,7 @@ pub async fn send_request_streaming<'a>(
         &provider.base_url,
         &resolved_addrs,
         settings.proxy_url.as_deref(),
+        &provider.effective_user_agent(),
     )?;
 
     let endpoint = normalize_endpoint(&provider.base_url, provider_type);
@@ -626,13 +642,14 @@ pub async fn send_request_streaming<'a>(
     };
 
     for attempt in 0..3 {
-        let response = match client
+        let mut req = client
             .post(&endpoint)
             .header("content-type", "application/json")
-            .body(body.clone())
-            .send()
-            .await
-        {
+            .body(body.clone());
+        if let Some(sid) = session_id {
+            req = req.header("X-Conversation-Id", sid);
+        }
+        let response = match req.send().await {
             Ok(response) => response,
             Err(error) => {
                 if should_retry_transport_error(&error) && attempt < 2 {
